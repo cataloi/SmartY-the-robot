@@ -73,9 +73,9 @@
 <body>
     <div id="instructions">
         <h1>Meet SmartY!</h1>
-        <p><strong>Desktop:</strong> Arrows to Move, Ctrl to Run, Space to Jump</p>
-        <p><strong>Zoom:</strong> Mouse Wheel or +/- keys</p>
-        <p><strong>Mobile:</strong> Left side to Move/Run, Right side to Jump, Pinch to Zoom</p>
+        <p><strong>Move:</strong> Arrows / Ctrl to Run / Space to Jump</p>
+        <p><strong>Camera:</strong> Click & Drag to Rotate, Scroll to Zoom</p>
+        <p><strong>Mobile:</strong> Left side Move, Right side Jump</p>
     </div>
     
     <div id="left-hint" class="touch-hint">Drag to Move</div>
@@ -91,6 +91,12 @@
         let smartY; // Our character group
         let zoom = 1.0; 
         
+        // Camera Orbit Variables
+        let isMouseDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+        let camYaw = 0;     // Horizontal angle
+        let camPitch = 0.5; // Vertical angle (0.5 rad is slightly looking down)
+
         let audioCtx;
         
         const rig = {
@@ -180,6 +186,32 @@
 
             window.addEventListener('resize', onWindowResize);
             
+            // Mouse Drag Listeners for Camera Orbit
+            renderer.domElement.addEventListener('mousedown', (e) => {
+                isMouseDragging = true;
+                previousMousePosition = { x: e.clientX, y: e.clientY };
+            });
+
+            window.addEventListener('mouseup', () => {
+                isMouseDragging = false;
+            });
+
+            window.addEventListener('mousemove', (e) => {
+                if (isMouseDragging) {
+                    const deltaX = e.clientX - previousMousePosition.x;
+                    const deltaY = e.clientY - previousMousePosition.y;
+                    previousMousePosition = { x: e.clientX, y: e.clientY };
+
+                    // Adjust angles
+                    camYaw -= deltaX * 0.005; 
+                    camPitch += deltaY * 0.005;
+
+                    // Clamp pitch to avoid going underground or flipping
+                    camPitch = Math.max(0.1, Math.min(Math.PI / 2 - 0.1, camPitch));
+                }
+            });
+
+            // Zoom Listeners
             window.addEventListener('wheel', (e) => {
                 e.preventDefault();
                 if (e.deltaY > 0) {
@@ -331,13 +363,24 @@
             const whiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
             const blackMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
 
+            // Helper to add thin black edges
+            function addEdges(mesh) {
+                const edges = new THREE.EdgesGeometry(mesh.geometry);
+                const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x000000 }));
+                mesh.add(line);
+            }
+
             const torsoGeo = new THREE.BoxGeometry(1, 1.5, 0.6);
             const torso = new THREE.Mesh(torsoGeo, blueMat);
-            torso.position.y = 2.4; torso.castShadow = true; smartY.add(torso);
+            torso.position.y = 2.4; torso.castShadow = true; 
+            addEdges(torso);
+            smartY.add(torso);
 
             const headGeo = new THREE.BoxGeometry(1.2, 1, 1); 
             const head = new THREE.Mesh(headGeo, blueMat);
-            head.position.y = 1.4; head.castShadow = true; torso.add(head);
+            head.position.y = 1.4; head.castShadow = true; 
+            addEdges(head);
+            torso.add(head);
 
             const eyeGeo = new THREE.PlaneGeometry(0.25, 0.25);
             const leftEye = new THREE.Mesh(eyeGeo, whiteMat); leftEye.position.set(-0.25, 0.15, 0.51); head.add(leftEye);
@@ -352,8 +395,13 @@
                 const m = new THREE.Mesh(mouthPixelGeo, blackMat); m.position.set(pos[0], pos[1], 0); mouthGroup.add(m);
             });
 
-            const antStem = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.3, 0.05), darkGreyMat); antStem.position.y = 0.65; head.add(antStem);
-            const antBulb = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.15), new THREE.MeshBasicMaterial({color: 0xff0000})); antBulb.position.y = 0.2; antStem.add(antBulb);
+            const antStem = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.3, 0.05), darkGreyMat); antStem.position.y = 0.65; 
+            addEdges(antStem);
+            head.add(antStem);
+            
+            const antBulb = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.15), new THREE.MeshBasicMaterial({color: 0xff0000})); antBulb.position.y = 0.2; 
+            addEdges(antBulb);
+            antStem.add(antBulb);
 
             function createArticulatedLimb(isArm, rigTarget) {
                 const limbAnchor = new THREE.Group();
@@ -363,45 +411,50 @@
                 const jointSize = width * 0.8;
 
                 const upper = new THREE.Mesh(new THREE.BoxGeometry(width, upperLen, width), blueMat);
-                upper.position.y = -upperLen / 2; upper.castShadow = true; limbAnchor.add(upper);
+                upper.position.y = -upperLen / 2; upper.castShadow = true; 
+                addEdges(upper);
+                limbAnchor.add(upper);
 
                 const lowerPivot = new THREE.Group(); lowerPivot.position.y = -upperLen; limbAnchor.add(lowerPivot);
-                const joint = new THREE.Mesh(new THREE.BoxGeometry(jointSize, jointSize, jointSize), darkGreyMat); lowerPivot.add(joint);
+                const joint = new THREE.Mesh(new THREE.BoxGeometry(jointSize, jointSize, jointSize), darkGreyMat); 
+                addEdges(joint);
+                lowerPivot.add(joint);
 
                 const lower = new THREE.Mesh(new THREE.BoxGeometry(width, lowerLen, width), blueMat);
-                lower.position.y = - (lowerLen / 2) - (jointSize / 2); lower.castShadow = true; lowerPivot.add(lower);
+                lower.position.y = - (lowerLen / 2) - (jointSize / 2); lower.castShadow = true; 
+                addEdges(lower);
+                lowerPivot.add(lower);
 
                 if (isArm) {
-                    // --- Robotic Hand ---
                     const handGroup = new THREE.Group();
-                    // Adjusted Y offset to attach snugly to the wrist
                     handGroup.position.y = -lowerLen - jointSize - 0.02;
                     lowerPivot.add(handGroup);
 
-                    // Palm (Smaller dimensions)
-                    const palmGeo = new THREE.BoxGeometry(width * 0.9, 0.15, width * 0.9);
-                    const palm = new THREE.Mesh(palmGeo, darkGreyMat);
+                    const palm = new THREE.Mesh(new THREE.BoxGeometry(width * 0.9, 0.15, width * 0.9), darkGreyMat);
                     palm.castShadow = true;
+                    addEdges(palm);
                     handGroup.add(palm);
 
-                    // Fingers (Claws) - Thinner and shorter
                     const fingerGeo = new THREE.BoxGeometry(0.05, 0.18, 0.05);
-                    
                     const finger1 = new THREE.Mesh(fingerGeo, darkGreyMat);
-                    finger1.position.set(-0.08, -0.12, 0); // Closer to center
-                    finger1.rotation.z = 0.15; // Gentle angle
+                    finger1.position.set(-0.08, -0.12, 0); 
+                    finger1.rotation.z = 0.15; 
                     finger1.castShadow = true;
+                    addEdges(finger1);
                     handGroup.add(finger1);
 
                     const finger2 = new THREE.Mesh(fingerGeo, darkGreyMat);
-                    finger2.position.set(0.08, -0.12, 0); // Closer to center
-                    finger2.rotation.z = -0.15; // Gentle angle
+                    finger2.position.set(0.08, -0.12, 0); 
+                    finger2.rotation.z = -0.15; 
                     finger2.castShadow = true;
+                    addEdges(finger2);
                     handGroup.add(finger2);
 
                 } else {
                     const foot = new THREE.Mesh(new THREE.BoxGeometry(width * 1.1, 0.2, width * 2), darkGreyMat);
-                    foot.position.y = -lowerLen - jointSize - 0.1; foot.position.z = width * 0.5; lowerPivot.add(foot);
+                    foot.position.y = -lowerLen - jointSize - 0.1; foot.position.z = width * 0.5; 
+                    addEdges(foot);
+                    lowerPivot.add(foot);
                 }
                 rigTarget.upper = limbAnchor; rigTarget.lower = lowerPivot;
                 return limbAnchor;
@@ -527,7 +580,6 @@
             }
 
             if (!isGrounded) {
-                // JUMPING POSE
                 const isRising = velocityY > 0;
                 const targetHip = isRising ? -1.2 : 0.0;
                 const targetKnee = isRising ? 1.5 : 0.2;
@@ -544,15 +596,9 @@
                 rig.rightArm.lower.rotation.x = 0;
 
             } else if (moved) {
-                // WALKING / RUNNING CYCLE
                 const walkAmp = isRunning ? 1.0 : 0.8; 
-                
-                // Forward Bias to swing legs FORWARD (Negative X rotation = Forward)
                 const forwardBias = isRunning ? -0.1 : -0.25;
 
-                // [FIXED] Inverted the sine wave (-Math.sin) to sync direction with knee bends
-                // Previously positive sine meant leg swung back when knee bent (Moonwalk look)
-                // Now negative sine means leg swings forward when knee bends (Natural walk)
                 const leftHipAngle = -Math.sin(animTime) * walkAmp + forwardBias;
                 const rightHipAngle = -Math.sin(animTime + Math.PI) * walkAmp + forwardBias;
 
@@ -574,7 +620,6 @@
                 }
 
             } else {
-                // IDLE
                 const resetSpeed = 0.1;
                 rig.leftLeg.upper.rotation.x = THREE.MathUtils.lerp(rig.leftLeg.upper.rotation.x, 0, resetSpeed);
                 rig.rightLeg.upper.rotation.x = THREE.MathUtils.lerp(rig.rightLeg.upper.rotation.x, 0, resetSpeed);
@@ -587,10 +632,23 @@
             }
             lastAnimTime = animTime;
 
-            const relativeCameraOffset = new THREE.Vector3(0, 5 * zoom, 10 * zoom);
-            const cameraOffset = relativeCameraOffset.applyMatrix4( new THREE.Matrix4().makeTranslation(smartY.position.x, 0, smartY.position.z));
-            camera.position.lerp(cameraOffset, 0.1);
-            camera.lookAt(smartY.position.x, smartY.position.y + 2, smartY.position.z);
+            // Camera Orbit Logic
+            const radius = 10 * zoom;
+            const offsetY = radius * Math.sin(camPitch);
+            const hRadius = radius * Math.cos(camPitch);
+            const offsetX = hRadius * Math.sin(camYaw);
+            const offsetZ = hRadius * Math.cos(camYaw);
+
+            const targetCamPos = new THREE.Vector3(
+                smartY.position.x + offsetX,
+                smartY.position.y + offsetY,
+                smartY.position.z + offsetZ
+            );
+            
+            const lookTarget = new THREE.Vector3(smartY.position.x, smartY.position.y + 1.5, smartY.position.z);
+
+            camera.position.lerp(targetCamPos, 0.1);
+            camera.lookAt(lookTarget);
 
             renderer.render(scene, camera);
         }
