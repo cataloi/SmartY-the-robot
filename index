@@ -84,16 +84,34 @@
     
     <div id="joystick-zone"><div id="joystick-knob"></div></div>
 
-    <!-- Load Three.js -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- Import Map for module resolution -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.module.js",
+                "three/examples/": "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/"
+            }
+        }
+    </script>
 
-    <script>
+    <!-- Use Module type to import RoundedBoxGeometry -->
+    <script type="module">
+        import * as THREE from 'three';
+        import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+
         let scene, camera, renderer;
         let smartY, parrot; 
         let zoom = 1.0; 
         
         // Define a base scale for the character
         const BASE_SCALE = 0.7;
+        const CORNER_RADIUS = 0.08; 
+
+        // Environment Data for Collisions
+        const cityMap = {
+            buildings: [],
+            sidewalks: []
+        };
 
         // Camera Orbit Variables
         let isMouseDragging = false;
@@ -103,7 +121,7 @@
 
         let audioCtx;
         
-        // Extended Rig to hold references for perching
+        // Extended Rig
         const rig = {
             leftArm: { upper: null, lower: null },
             rightArm: { upper: null, lower: null },
@@ -153,8 +171,8 @@
 
         function init() {
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0xe0e0e0);
-            scene.fog = new THREE.Fog(0xe0e0e0, 20, 100);
+            scene.background = new THREE.Color(0x88ccff); // Sky color
+            scene.fog = new THREE.Fog(0x88ccff, 20, 150);
 
             camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
             camera.position.set(0, 5, 10);
@@ -169,28 +187,27 @@
             scene.add(ambientLight);
 
             const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-            dirLight.position.set(10, 20, 10);
+            dirLight.position.set(50, 100, 50);
             dirLight.castShadow = true;
-            dirLight.shadow.camera.top = 20;
-            dirLight.shadow.camera.bottom = -20;
-            dirLight.shadow.camera.left = -20;
-            dirLight.shadow.camera.right = 20;
+            dirLight.shadow.mapSize.width = 2048;
+            dirLight.shadow.mapSize.height = 2048;
+            dirLight.shadow.camera.top = 100;
+            dirLight.shadow.camera.bottom = -100;
+            dirLight.shadow.camera.left = -100;
+            dirLight.shadow.camera.right = 100;
             scene.add(dirLight);
 
-            const groundGeo = new THREE.PlaneGeometry(200, 200);
-            const groundMat = new THREE.MeshStandardMaterial({ color: 0x999999, depthWrite: false });
+            // Ground - Asphalt
+            const groundGeo = new THREE.PlaneGeometry(400, 400);
+            const groundMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8 }); 
             const ground = new THREE.Mesh(groundGeo, groundMat);
             ground.rotation.x = -Math.PI / 2;
             ground.receiveShadow = true;
             scene.add(ground);
 
-            const gridHelper = new THREE.GridHelper(200, 50, 0x000000, 0x808080);
-            gridHelper.material.opacity = 0.2;
-            gridHelper.material.transparent = true;
-            scene.add(gridHelper);
-
             createSmartY();
             createParrot(); 
+            createCity(); 
 
             window.addEventListener('resize', onWindowResize);
             
@@ -230,20 +247,16 @@
                 if(e.key === 'Control') keys.Control = true;
                 if(keys.hasOwnProperty(e.code) || e.code === 'Space') keys[e.code] = true; 
                 
-                // Zoom
                 if (e.key === '+' || e.key === '=') zoom = Math.max(0.5, zoom - 0.1);
                 if (e.key === '-' || e.key === '_') zoom = Math.min(2.5, zoom + 0.1);
 
                 // --- Parrot Controls ---
                 if (e.code === 'KeyB') {
-                    // Call the Bird (Land on shoulder or arm)
                     if (parrot && parrot.userData.state === 0) {
-                        parrot.userData.state = 1; // Force landing
+                        parrot.userData.state = 1; 
                         const parts = ['lShoulder', 'rShoulder', 'lArm', 'rArm'];
                         const target = parts[Math.floor(Math.random() * parts.length)];
                         parrot.userData.targetObj = target;
-                        
-                        // Setup Arm Pose if needed
                         if (target.includes('Arm')) {
                             parrot.userData.armPose.z = 1.1 + Math.random() * 0.5; 
                             parrot.userData.armPose.x = 0.1 + Math.random() * 0.4;
@@ -251,17 +264,16 @@
                     }
                 }
                 if (e.code === 'KeyF') {
-                    // Fly Away
                     if (parrot && (parrot.userData.state === 1 || parrot.userData.state === 2)) {
-                        parrot.userData.state = 0; // Force fly
+                        parrot.userData.state = 0; 
                         const angle = Math.random() * Math.PI * 2;
                         const radius = 6 + Math.random() * 4;
                         parrot.userData.targetPos.set(
                             smartY.position.x + Math.sin(angle) * radius,
-                            smartY.position.y + 3,
+                            smartY.position.y + 6, // Fly high
                             smartY.position.z + Math.cos(angle) * radius
                         );
-                        parrot.userData.nextActionTime = Date.now() + 2000; // Fly for at least 2s
+                        parrot.userData.nextActionTime = Date.now() + 2000; 
                     }
                 }
             });
@@ -285,14 +297,35 @@
             }
         }
 
+        // --- PHYSICS & COLLISION HELPERS ---
+
+        function getGroundHeight(x, z) {
+            let h = 0.02; // Road level
+            for (let sw of cityMap.sidewalks) {
+                if (x >= sw.minX && x <= sw.maxX && z >= sw.minZ && z <= sw.maxZ) {
+                    h = Math.max(h, sw.height);
+                }
+            }
+            return h;
+        }
+
+        function checkBuildingCollision(x, z) {
+            const buffer = 0.6; 
+            for (let b of cityMap.buildings) {
+                if (x >= b.minX - buffer && x <= b.maxX + buffer &&
+                    z >= b.minZ - buffer && z <= b.maxZ + buffer) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // --- Touch Handlers ---
         function handleTouchStart(e) {
             e.preventDefault();
             initAudio();
-
             for (let i = 0; i < e.changedTouches.length; i++) {
                 const t = e.changedTouches[i];
-                const halfWidth = window.innerWidth / 2;
-
                 if (e.touches.length === 2) {
                     const dx = e.touches[0].pageX - e.touches[1].pageX;
                     const dy = e.touches[0].pageY - e.touches[1].pageY;
@@ -300,8 +333,7 @@
                     pinchStartZoom = zoom;
                     continue;
                 }
-
-                if (t.clientX < halfWidth) {
+                if (t.clientX < window.innerWidth / 2) {
                     if (!touchInput.active) {
                         touchInput.active = true;
                         touchInput.id = t.identifier;
@@ -330,7 +362,6 @@
                 const ratio = pinchStartDist / dist;
                 zoom = Math.max(0.5, Math.min(2.5, pinchStartZoom * ratio));
             }
-
             for (let i = 0; i < e.changedTouches.length; i++) {
                 const t = e.changedTouches[i];
                 if (touchInput.active && t.identifier === touchInput.id) {
@@ -391,6 +422,10 @@
             osc.stop(audioCtx.currentTime + 0.1);
         }
 
+        function createBox(w, h, d, radius = CORNER_RADIUS) {
+            return new RoundedBoxGeometry(w, h, d, 4, radius);
+        }
+
         function createSmartY() {
             smartY = new THREE.Group();
             smartY.scale.set(BASE_SCALE, BASE_SCALE, BASE_SCALE);
@@ -400,47 +435,23 @@
             const whiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
             const blackMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
 
-            function addEdges(mesh) {
-                const edges = new THREE.EdgesGeometry(mesh.geometry);
-                const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x000000 }));
-                mesh.add(line);
-            }
-
             const torso = new THREE.Group();
-            torso.position.y = 2.37; 
+            // [FIXED] Raised torso position so feet bottom is at y=0
+            torso.position.y = 2.56; 
             smartY.add(torso);
 
-            const pelvisGeo = new THREE.BoxGeometry(1, 0.4, 0.6);
-            const pelvis = new THREE.Mesh(pelvisGeo, blueMat);
-            pelvis.position.y = -0.57; 
-            pelvis.castShadow = true;
-            addEdges(pelvis);
-            torso.add(pelvis);
+            const pelvis = new THREE.Mesh(createBox(1, 0.4, 0.6), blueMat);
+            pelvis.position.y = -0.57; pelvis.castShadow = true; torso.add(pelvis);
 
-            const waistGeo = new THREE.BoxGeometry(0.85, 0.12, 0.45); 
-            const waist = new THREE.Mesh(waistGeo, darkGreyMat);
-            waist.position.y = -0.31; 
-            waist.castShadow = true;
-            addEdges(waist);
-            torso.add(waist);
+            const waist = new THREE.Mesh(createBox(0.85, 0.12, 0.45), darkGreyMat);
+            waist.position.y = -0.31; waist.castShadow = true; torso.add(waist);
 
-            const chestGeo = new THREE.BoxGeometry(1, 1.0, 0.6); 
-            const chest = new THREE.Mesh(chestGeo, blueMat);
-            chest.position.y = 0.25; 
-            chest.castShadow = true;
-            addEdges(chest);
-            torso.add(chest);
-            
-            // Store chest reference for shoulder targeting
+            const chest = new THREE.Mesh(createBox(1, 1.0, 0.6), blueMat);
+            chest.position.y = 0.25; chest.castShadow = true; torso.add(chest);
             rig.chest = chest;
 
-            const headGeo = new THREE.BoxGeometry(1.2, 1, 1); 
-            const head = new THREE.Mesh(headGeo, blueMat);
-            head.position.y = 1.4; head.castShadow = true; 
-            addEdges(head);
-            torso.add(head);
-            
-            // Store head reference
+            const head = new THREE.Mesh(createBox(1.2, 1, 1), blueMat);
+            head.position.y = 1.4; head.castShadow = true; torso.add(head);
             rig.head = head;
 
             const eyeGeo = new THREE.PlaneGeometry(0.25, 0.25);
@@ -456,12 +467,10 @@
                 const m = new THREE.Mesh(mouthPixelGeo, blackMat); m.position.set(pos[0], pos[1], 0); mouthGroup.add(m);
             });
 
-            const antStem = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.3, 0.05), darkGreyMat); antStem.position.y = 0.65; 
-            addEdges(antStem);
-            head.add(antStem);
-            
-            const antBulb = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.15), new THREE.MeshBasicMaterial({color: 0xff0000})); antBulb.position.y = 0.2; 
-            antStem.add(antBulb);
+            const antStem = new THREE.Mesh(createBox(0.05, 0.3, 0.05), darkGreyMat); 
+            antStem.position.y = 0.65; head.add(antStem);
+            const antBulb = new THREE.Mesh(createBox(0.15, 0.15, 0.15), new THREE.MeshBasicMaterial({color: 0xff0000})); 
+            antBulb.position.y = 0.2; antStem.add(antBulb);
 
             function createArticulatedLimb(isArm, rigTarget) {
                 const limbAnchor = new THREE.Group();
@@ -470,50 +479,29 @@
                 const lowerLen = isArm ? 0.5 : 0.7;
                 const jointSize = width * 0.8;
 
-                const upper = new THREE.Mesh(new THREE.BoxGeometry(width, upperLen, width), blueMat);
-                upper.position.y = -upperLen / 2; upper.castShadow = true; 
-                addEdges(upper);
-                limbAnchor.add(upper);
+                const upper = new THREE.Mesh(createBox(width, upperLen, width), blueMat);
+                upper.position.y = -upperLen / 2; upper.castShadow = true; limbAnchor.add(upper);
 
                 const lowerPivot = new THREE.Group(); lowerPivot.position.y = -upperLen; limbAnchor.add(lowerPivot);
-                const joint = new THREE.Mesh(new THREE.BoxGeometry(jointSize, jointSize, jointSize), darkGreyMat); 
-                addEdges(joint);
-                lowerPivot.add(joint);
+                const joint = new THREE.Mesh(createBox(jointSize, jointSize, jointSize), darkGreyMat); lowerPivot.add(joint);
 
-                const lower = new THREE.Mesh(new THREE.BoxGeometry(width, lowerLen, width), blueMat);
-                lower.position.y = - (lowerLen / 2) - (jointSize / 2); lower.castShadow = true; 
-                addEdges(lower);
-                lowerPivot.add(lower);
+                const lower = new THREE.Mesh(createBox(width, lowerLen, width), blueMat);
+                lower.position.y = - (lowerLen / 2) - (jointSize / 2); lower.castShadow = true; lowerPivot.add(lower);
 
                 if (isArm) {
                     const handGroup = new THREE.Group();
                     handGroup.position.y = -lowerLen - jointSize - 0.02;
                     lowerPivot.add(handGroup);
 
-                    const palm = new THREE.Mesh(new THREE.BoxGeometry(width * 0.9, 0.15, width * 0.9), darkGreyMat);
-                    palm.castShadow = true;
-                    addEdges(palm);
-                    handGroup.add(palm);
+                    const palm = new THREE.Mesh(createBox(width * 0.9, 0.15, width * 0.9), darkGreyMat);
+                    palm.castShadow = true; handGroup.add(palm);
 
-                    const fingerGeo = new THREE.BoxGeometry(0.04, 0.12, width * 0.9);
-                    
-                    const finger1 = new THREE.Mesh(fingerGeo, darkGreyMat);
-                    finger1.position.set(-0.08, -0.12, 0); 
-                    finger1.castShadow = true;
-                    addEdges(finger1);
-                    handGroup.add(finger1);
-
-                    const finger2 = new THREE.Mesh(fingerGeo, darkGreyMat);
-                    finger2.position.set(0.08, -0.12, 0); 
-                    finger2.castShadow = true;
-                    addEdges(finger2);
-                    handGroup.add(finger2);
-
+                    const fingerGeo = createBox(0.04, 0.12, width * 0.9);
+                    const finger1 = new THREE.Mesh(fingerGeo, darkGreyMat); finger1.position.set(-0.08, -0.12, 0); finger1.castShadow = true; handGroup.add(finger1);
+                    const finger2 = new THREE.Mesh(fingerGeo, darkGreyMat); finger2.position.set(0.08, -0.12, 0); finger2.castShadow = true; handGroup.add(finger2);
                 } else {
-                    const foot = new THREE.Mesh(new THREE.BoxGeometry(width * 1.1, 0.2, width * 2), darkGreyMat);
-                    foot.position.y = -lowerLen - jointSize - 0.1; foot.position.z = width * 0.5; 
-                    addEdges(foot);
-                    lowerPivot.add(foot);
+                    const foot = new THREE.Mesh(createBox(width * 1.1, 0.2, width * 2), darkGreyMat);
+                    foot.position.y = -lowerLen - jointSize - 0.1; foot.position.z = width * 0.5; lowerPivot.add(foot);
                 }
                 rigTarget.upper = limbAnchor; rigTarget.lower = lowerPivot;
                 return limbAnchor;
@@ -535,35 +523,23 @@
             const yellowMat = new THREE.MeshStandardMaterial({ color: 0xFFEB3B });
             const blackMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
 
-            // Initialize Parrot Data with Randomized AI
-            // State: 0=FLYING, 1=LANDING, 2=PERCHED
             parrot.userData = { 
-                lWing: null, 
-                rWing: null,
-                state: 0,
-                targetPos: new THREE.Vector3(),
-                targetObj: null, // "lArm", "rArm", "head", "lShoulder", "rShoulder" or null
-                nextActionTime: 0,
-                landingOffset: new THREE.Vector3(), // For head offset (avoid antenna)
-                armPose: { z: 0, x: 0 } // For randomized arm landing angles
+                lWing: null, rWing: null, state: 0, targetPos: new THREE.Vector3(),
+                targetObj: null, nextActionTime: 0, landingOffset: new THREE.Vector3(), 
+                armPose: { z: 0, x: 0 } 
             };
 
-            function addEdges(mesh) {
-                const edges = new THREE.EdgesGeometry(mesh.geometry);
-                const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x000000 }));
-                mesh.add(line);
-            }
+            // Use rounded boxes for Parrot too
+            const body = new THREE.Mesh(createBox(0.15, 0.2, 0.25, 0.04), greenMat);
+            body.castShadow = true; parrot.add(body);
 
-            const body = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.2, 0.25), greenMat);
-            addEdges(body); body.castShadow = true; parrot.add(body);
-
-            // [FIXED] Head facing +Z (Forward)
-            const head = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.12), greenMat);
+            // Head facing +Z
+            const head = new THREE.Mesh(createBox(0.12, 0.12, 0.12, 0.03), greenMat);
             head.position.set(0, 0.15, 0.1); 
-            addEdges(head); head.castShadow = true; parrot.add(head);
+            head.castShadow = true; parrot.add(head);
 
-            const beak = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.08, 4), yellowMat);
-            beak.rotation.x = -Math.PI / 2; beak.rotation.y = Math.PI / 4; 
+            const beak = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.08, 8), yellowMat);
+            beak.rotation.x = Math.PI / 2; 
             beak.position.set(0, 0, 0.08); 
             head.add(beak);
 
@@ -571,23 +547,90 @@
             const leftEye = new THREE.Mesh(eyeGeo, blackMat); leftEye.position.set(-0.061, 0.02, 0.02); leftEye.rotation.y = -Math.PI / 2; head.add(leftEye);
             const rightEye = new THREE.Mesh(eyeGeo, blackMat); rightEye.position.set(0.061, 0.02, 0.02); rightEye.rotation.y = Math.PI / 2; head.add(rightEye);
 
-            const wingGeo = new THREE.BoxGeometry(0.25, 0.02, 0.15);
+            const wingGeo = createBox(0.25, 0.02, 0.15, 0.01);
             
             const lWingGroup = new THREE.Group(); lWingGroup.position.set(-0.08, 0.05, 0); parrot.add(lWingGroup);
-            const lWing = new THREE.Mesh(wingGeo, redMat); lWing.position.x = -0.125; addEdges(lWing); lWing.castShadow = true; lWingGroup.add(lWing);
+            const lWing = new THREE.Mesh(wingGeo, redMat); lWing.position.x = -0.125; lWing.castShadow = true; lWingGroup.add(lWing);
 
             const rWingGroup = new THREE.Group(); rWingGroup.position.set(0.08, 0.05, 0); parrot.add(rWingGroup);
-            const rWing = new THREE.Mesh(wingGeo, redMat); rWing.position.x = 0.125; addEdges(rWing); rWing.castShadow = true; rWingGroup.add(rWing);
+            const rWing = new THREE.Mesh(wingGeo, redMat); rWing.position.x = 0.125; rWing.castShadow = true; rWingGroup.add(rWing);
 
-            const tail = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.02, 0.2), redMat);
+            // Tail facing -Z
+            const tail = new THREE.Mesh(createBox(0.1, 0.02, 0.2, 0.01), redMat);
             tail.position.set(0, -0.05, -0.2); 
-            addEdges(tail); tail.castShadow = true; parrot.add(tail);
+            tail.castShadow = true; parrot.add(tail);
 
             parrot.userData.lWing = lWingGroup;
             parrot.userData.rWing = rWingGroup;
 
             parrot.position.set(2, 3, 2);
             scene.add(parrot);
+        }
+
+        function createCity() {
+            const cityGroup = new THREE.Group();
+            scene.add(cityGroup);
+
+            const matGrey = new THREE.MeshStandardMaterial({ color: 0x888888 });
+            const matDarkGrey = new THREE.MeshStandardMaterial({ color: 0x555555 });
+            const matBlueGlass = new THREE.MeshStandardMaterial({ color: 0x88CCFF });
+            const matSidewalk = new THREE.MeshStandardMaterial({ color: 0x999999 }); 
+            const matRoadLine = new THREE.MeshBasicMaterial({ color: 0xFFFFFF }); 
+
+            const blockSize = 30; 
+            const streetWidth = 10; 
+            const buildingArea = blockSize - streetWidth; 
+            const sidewalkHeight = 0.2;
+            
+            for(let x = -150; x <= 150; x += blockSize) {
+                for(let z = -150; z <= 150; z += blockSize) {
+                    
+                    const dist = Math.sqrt(x*x + z*z);
+                    if(dist < 25) continue;
+
+                    const swGeo = createBox(buildingArea, sidewalkHeight, buildingArea, 0.1);
+                    const sidewalk = new THREE.Mesh(swGeo, matSidewalk);
+                    sidewalk.position.set(x, sidewalkHeight/2, z);
+                    sidewalk.receiveShadow = true;
+                    cityGroup.add(sidewalk);
+
+                    cityMap.sidewalks.push({
+                        minX: x - buildingArea/2, maxX: x + buildingArea/2,
+                        minZ: z - buildingArea/2, maxZ: z + buildingArea/2,
+                        height: sidewalkHeight
+                    });
+
+                    if (Math.random() > 0.15) {
+                        const h = 5 + Math.random() * 20; 
+                        const w = buildingArea * 0.7; 
+                        const d = buildingArea * 0.7; 
+                        const randMat = Math.random() > 0.5 ? matGrey : (Math.random() > 0.5 ? matDarkGrey : matBlueGlass);
+                        const bGeo = createBox(w, h, d, 0.2);
+                        const building = new THREE.Mesh(bGeo, randMat);
+                        building.position.set(x, h/2 + sidewalkHeight, z); 
+                        building.castShadow = true;
+                        building.receiveShadow = true;
+                        cityGroup.add(building);
+
+                        cityMap.buildings.push({
+                            minX: x - w/2, maxX: x + w/2,
+                            minZ: z - d/2, maxZ: z + d/2
+                        });
+                    }
+
+                    const lineGeoX = new THREE.PlaneGeometry(blockSize, 0.15);
+                    const lineX = new THREE.Mesh(lineGeoX, matRoadLine);
+                    lineX.rotation.x = -Math.PI/2;
+                    lineX.position.set(x + blockSize/2, 0.02, z); 
+                    cityGroup.add(lineX);
+
+                    const lineGeoZ = new THREE.PlaneGeometry(0.15, blockSize);
+                    const lineZ = new THREE.Mesh(lineGeoZ, matRoadLine);
+                    lineZ.rotation.x = -Math.PI/2;
+                    lineZ.position.set(x, 0.02, z + blockSize/2);
+                    cityGroup.add(lineZ);
+                }
+            }
         }
 
         function onWindowResize() {
@@ -601,24 +644,18 @@
 
             let holdingParrot = null; 
 
-            // --- Parrot AI Animation ---
             if (parrot && smartY) {
                 const now = Date.now();
                 const pData = parrot.userData;
                 const pTime = now * 0.002;
 
                 if (pData.state === 0) {
-                    // --- FLYING STATE ---
                     if (now > pData.nextActionTime) {
                         const rand = Math.random();
-                        
                         if (rand < 0.4) {
-                            // 40% Chance to LAND
                             pData.state = 1; 
-                            
                             const parts = ['head', 'lShoulder', 'rShoulder', 'lArm', 'rArm'];
                             pData.targetObj = parts[Math.floor(Math.random() * parts.length)];
-                            
                             if (pData.targetObj === 'head') {
                                 const side = Math.random() > 0.5 ? 1 : -1;
                                 pData.landingOffset.set(side * 0.35 * BASE_SCALE, 0.55 * BASE_SCALE, 0);
@@ -626,19 +663,16 @@
                                 pData.armPose.z = 1.1 + Math.random() * 0.5; 
                                 pData.armPose.x = 0.1 + Math.random() * 0.4;
                             }
-
                         } else {
                             const isExploring = Math.random() < 0.3;
                             const radius = isExploring ? 8 + Math.random() * 7 : 3 + Math.random() * 2;
                             const angle = Math.random() * Math.PI * 2;
-                            const height = 1.5 + Math.random() * 3.5;
-                            
+                            const height = 4 + Math.random() * 10; 
                             pData.targetPos.set(
                                 smartY.position.x + Math.sin(angle) * radius,
                                 smartY.position.y + height,
                                 smartY.position.z + Math.cos(angle) * radius
                             );
-                            
                             pData.nextActionTime = now + 3000 + Math.random() * 4000;
                         }
                     }
@@ -646,25 +680,19 @@
                     const dist = parrot.position.distanceTo(pData.targetPos);
                     const speed = 0.03 + (dist > 5 ? 0.05 : 0.0);
                     parrot.position.lerp(pData.targetPos, speed);
-                    
                     const lookPos = pData.targetPos.clone();
                     lookPos.y = parrot.position.y; 
                     parrot.lookAt(lookPos);
 
-                    // Flying: Wings Spread & Flap
                     const flapSpeed = 15;
                     const unfoldSpeed = 0.1;
-                    // Reset Y sweep to 0 (Spread)
                     pData.lWing.rotation.y = THREE.MathUtils.lerp(pData.lWing.rotation.y, 0, unfoldSpeed);
                     pData.rWing.rotation.y = THREE.MathUtils.lerp(pData.rWing.rotation.y, 0, unfoldSpeed);
-                    
                     pData.lWing.rotation.z = Math.sin(pTime * flapSpeed) * 0.6;
                     pData.rWing.rotation.z = -Math.sin(pTime * flapSpeed) * 0.6;
 
                 } else if (pData.state === 1) {
-                    // --- LANDING STATE ---
                     let targetWorldPos = new THREE.Vector3();
-                    
                     if (pData.targetObj === 'lArm') holdingParrot = 'left';
                     if (pData.targetObj === 'rArm') holdingParrot = 'right';
 
@@ -687,23 +715,28 @@
                         targetWorldPos.y += 0.2;
                     }
 
+                    const dist = parrot.position.distanceTo(targetWorldPos);
                     parrot.position.lerp(targetWorldPos, 0.08);
-                    parrot.lookAt(targetWorldPos);
 
-                    if (parrot.position.distanceTo(targetWorldPos) < 0.2) {
-                        pData.state = 2; // Perched
-                        // Random duration 2-5 seconds
+                    // Flare rotation to match SmartY
+                    if (dist > 0.6) {
+                        parrot.lookAt(targetWorldPos);
+                    } else {
+                        const targetQuat = new THREE.Quaternion();
+                        targetQuat.setFromEuler(new THREE.Euler(0, smartY.rotation.y, 0));
+                        parrot.quaternion.slerp(targetQuat, 0.15);
+                    }
+
+                    if (dist < 0.1) {
+                        pData.state = 2; 
                         pData.nextActionTime = now + 2000 + Math.random() * 3000; 
                     }
 
-                    // Fast Flap
                     pData.lWing.rotation.z = Math.sin(pTime * 25) * 0.5;
                     pData.rWing.rotation.z = -Math.sin(pTime * 25) * 0.5;
 
                 } else if (pData.state === 2) {
-                    // --- PERCHED STATE ---
                     let anchorPos = new THREE.Vector3();
-
                     if (pData.targetObj === 'lArm') holdingParrot = 'left';
                     if (pData.targetObj === 'rArm') holdingParrot = 'right';
 
@@ -729,23 +762,20 @@
                     parrot.position.copy(anchorPos);
                     parrot.rotation.set(0, smartY.rotation.y, 0); 
 
-                    // WING RETRACTION LOGIC
                     const foldSpeed = 0.1;
                     pData.lWing.rotation.z = THREE.MathUtils.lerp(pData.lWing.rotation.z, 0, foldSpeed);
                     pData.rWing.rotation.z = THREE.MathUtils.lerp(pData.rWing.rotation.z, 0, foldSpeed);
-                    
                     pData.lWing.rotation.y = THREE.MathUtils.lerp(pData.lWing.rotation.y, -1.4, foldSpeed);
                     pData.rWing.rotation.y = THREE.MathUtils.lerp(pData.rWing.rotation.y, 1.4, foldSpeed);
 
                     if (now > pData.nextActionTime) {
-                        pData.state = 0; // Take off
-                        pData.targetPos.set(parrot.position.x, parrot.position.y + 2, parrot.position.z); 
+                        pData.state = 0; 
+                        pData.targetPos.set(parrot.position.x, parrot.position.y + 4, parrot.position.z); 
                         pData.nextActionTime = now + 1000;
                     }
                 }
             }
 
-            // --- Eye Animation ---
             if (Date.now() > nextEyeMove) {
                 if (Math.random() > 0.3) {
                     eyeTargetX = (Math.random() - 0.5) * 0.14; 
@@ -782,22 +812,50 @@
 
             const currentSpeed = isRunning ? moveSpeed * 2.2 : moveSpeed;
 
+            // --- IMPROVED PHYSICS & COLLISION ---
             if (isGrounded && (Math.abs(inputX) > 0.1 || Math.abs(inputZ) > 0.1)) {
-                moved = true;
-                moveVec.z = inputZ * currentSpeed;
-                moveVec.x = inputX * currentSpeed;
+                
+                // [NEW] Calculate Movement Vector Relative to Camera View
+                const cos = Math.cos(camYaw);
+                const sin = Math.sin(camYaw);
+                
+                // Rotate input vector by camera angle
+                // Forward (inputZ < 0) should move away from camera
+                const worldInputX = inputX * cos + inputZ * sin;
+                const worldInputZ = -inputX * sin + inputZ * cos;
+
+                let potentialX = smartY.position.x + (worldInputX * currentSpeed);
+                let potentialZ = smartY.position.z + (worldInputZ * currentSpeed);
+
+                const currentX = smartY.position.x;
+                const currentZ = smartY.position.z;
+
+                let nextX = currentX;
+                let nextZ = currentZ;
+
+                if (!checkBuildingCollision(potentialX, currentZ)) {
+                    nextX = potentialX;
+                }
+                
+                if (!checkBuildingCollision(nextX, potentialZ)) {
+                    nextZ = potentialZ;
+                }
+
+                if (nextX !== currentX || nextZ !== currentZ) {
+                    moved = true;
+                    smartY.position.x = nextX;
+                    smartY.position.z = nextZ;
+                    
+                    // Update Rotation based on world movement vector
+                    const targetRotation = Math.atan2(worldInputX, worldInputZ);
+                    let rotDiff = targetRotation - smartY.rotation.y;
+                    while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
+                    while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
+                    smartY.rotation.y += rotDiff * 0.8; 
+                }
             }
 
-            if (moved && isGrounded) {
-                smartY.position.x += moveVec.x;
-                smartY.position.z += moveVec.z;
-                
-                const targetRotation = Math.atan2(moveVec.x, moveVec.z);
-                let rotDiff = targetRotation - smartY.rotation.y;
-                while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
-                while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
-                smartY.rotation.y += rotDiff * 0.8; 
-            }
+            const groundHeight = getGroundHeight(smartY.position.x, smartY.position.z);
 
             if (keys.Space && isGrounded) {
                 velocityY = jumpForce;
@@ -808,23 +866,35 @@
                 jumpMomentum.z = Math.cos(smartY.rotation.y) * forwardImpulse;
             }
 
-            if (velocityY > 0 && !keys.Space) velocityY -= gravity * 2.5;
-            else velocityY -= gravity;
-
-            smartY.position.y += velocityY;
             if (!isGrounded) {
+                velocityY -= gravity;
+                smartY.position.y += velocityY;
                 smartY.position.x += jumpMomentum.x;
                 smartY.position.z += jumpMomentum.z;
-            }
 
-            if (smartY.position.y <= 0) {
-                smartY.position.y = 0;
-                if (!isGrounded) {
-                    smartY.scale.set(BASE_SCALE * 1.1, BASE_SCALE * 0.85, BASE_SCALE * 1.1); 
+                if (checkBuildingCollision(smartY.position.x, smartY.position.z)) {
+                    smartY.position.x -= jumpMomentum.x;
+                    smartY.position.z -= jumpMomentum.z;
+                    jumpMomentum.set(0,0,0);
+                }
+
+                if (smartY.position.y <= groundHeight) {
+                    smartY.position.y = groundHeight;
+                    isGrounded = true;
+                    velocityY = 0;
+                    smartY.scale.set(BASE_SCALE * 1.1, BASE_SCALE * 0.85, BASE_SCALE * 1.1);
                     jumpMomentum.set(0, 0, 0);
                 }
-                velocityY = 0;
-                isGrounded = true;
+            } else {
+                if (smartY.position.y > groundHeight) {
+                    isGrounded = false;
+                    velocityY = -0.05; 
+                } else if (smartY.position.y < groundHeight) {
+                    smartY.position.y = THREE.MathUtils.lerp(smartY.position.y, groundHeight, 0.5);
+                }
+            }
+
+            if (isGrounded) {
                 smartY.scale.lerp(new THREE.Vector3(BASE_SCALE, BASE_SCALE, BASE_SCALE), 0.15);
             } else {
                 smartY.scale.lerp(new THREE.Vector3(BASE_SCALE * 0.9, BASE_SCALE * 1.1, BASE_SCALE * 0.9), 0.1);
@@ -848,14 +918,12 @@
                 }
             }
 
-            // Animation targets
             let lArmUpperX = 0, lArmLowerX = -0.1, lArmUpperZ = 0;
             let rArmUpperX = 0, rArmLowerX = -0.1, rArmUpperZ = 0;
             let lLegUpperX = 0, lLegLowerX = 0;
             let rLegUpperX = 0, rLegLowerX = 0;
 
             if (!isGrounded) {
-                // JUMPING
                 const targetHip = velocityY > 0 ? -1.2 : 0.0;
                 const targetKnee = velocityY > 0 ? 1.5 : 0.2;
                 lLegUpperX = targetHip; rLegUpperX = targetHip;
@@ -863,7 +931,6 @@
                 lArmUpperX = -2.5; rArmUpperX = -2.5;
                 lArmLowerX = 0; rArmLowerX = 0;
             } else if (moved) {
-                // WALKING
                 const walkAmp = isRunning ? 1.0 : 0.8; 
                 const forwardBias = isRunning ? -0.1 : -0.25;
                 lLegUpperX = -Math.sin(animTime) * walkAmp + forwardBias;
@@ -879,11 +946,9 @@
                     playStepSound(isRunning);
                 }
             } else {
-                // IDLE
                 lArmLowerX = -0.1; rArmLowerX = -0.1;
             }
 
-            // --- ARM RAISE OVERRIDE FOR PARROT ---
             if (holdingParrot === 'left') {
                 lArmUpperZ = -parrot.userData.armPose.z; 
                 lArmUpperX = -parrot.userData.armPose.x; 
@@ -894,7 +959,6 @@
                 rArmLowerX = -0.2; 
             }
 
-            // Apply Rotations Smoothly
             const lerpSpeed = 0.15;
             rig.leftLeg.upper.rotation.x = THREE.MathUtils.lerp(rig.leftLeg.upper.rotation.x, lLegUpperX, lerpSpeed);
             rig.rightLeg.upper.rotation.x = THREE.MathUtils.lerp(rig.rightLeg.upper.rotation.x, rLegUpperX, lerpSpeed);
@@ -911,7 +975,6 @@
 
             lastAnimTime = animTime;
 
-            // Camera Orbit Logic
             const radius = 8 * zoom;
             const offsetY = radius * Math.sin(camPitch);
             const hRadius = radius * Math.cos(camPitch);
@@ -932,7 +995,8 @@
             renderer.render(scene, camera);
         }
 
-        window.onload = init;
+        // Init call inside module
+        init();
     </script>
 </body>
 </html>
