@@ -102,6 +102,8 @@
         let scene, camera, renderer;
         let smartY, parrot; 
         let zoom = 1.0; 
+        let cars = []; 
+        let npcRobots = []; // Array to store NPC robots
         
         // Define a base scale for the character
         const BASE_SCALE = 0.7;
@@ -121,15 +123,8 @@
 
         let audioCtx;
         
-        // Extended Rig
-        const rig = {
-            leftArm: { upper: null, lower: null },
-            rightArm: { upper: null, lower: null },
-            leftLeg: { upper: null, lower: null },
-            rightLeg: { upper: null, lower: null },
-            head: null,
-            chest: null
-        };
+        // Global Rig Reference (Points to SmartY's rig for backward compatibility in animate loop)
+        let rig = null;
 
         const moveSpeed = 0.08; 
         
@@ -205,9 +200,26 @@
             ground.receiveShadow = true;
             scene.add(ground);
 
-            createSmartY();
-            createParrot(); 
+            // Generate City First to populate cityMap
             createCity(); 
+            
+            // Create SmartY
+            smartY = createRobot(0x2196F3); // Blue
+            // Set global rig reference to SmartY's rig
+            rig = smartY.userData.rig;
+            // Setup SmartY specific facial features refs
+            leftPupil = smartY.userData.leftPupil;
+            rightPupil = smartY.userData.rightPupil;
+            scene.add(smartY);
+
+            // Create Parrot
+            createParrot(); 
+            
+            // Create Traffic
+            createTraffic(); 
+
+            // Create NPC Robots
+            createNPCs(30);
 
             window.addEventListener('resize', onWindowResize);
             
@@ -270,7 +282,7 @@
                         const radius = 6 + Math.random() * 4;
                         parrot.userData.targetPos.set(
                             smartY.position.x + Math.sin(angle) * radius,
-                            smartY.position.y + 6, // Fly high
+                            smartY.position.y + 6, 
                             smartY.position.z + Math.cos(angle) * radius
                         );
                         parrot.userData.nextActionTime = Date.now() + 2000; 
@@ -289,6 +301,189 @@
             animate();
         }
 
+        // --- TRAFFIC & NPC SYSTEM ---
+        function createTraffic() {
+            // ... (Same as before) ...
+            const blockSize = 30;
+            const range = 180; 
+            for (let z = -150; z <= 150; z += blockSize) {
+                const roadCenterZ = z + blockSize/2;
+                if (roadCenterZ > 160) continue; 
+                if (Math.random() > 0.3) spawnCarRow(true, true, roadCenterZ, range);
+                if (Math.random() > 0.3) spawnCarRow(true, false, roadCenterZ, range);
+            }
+            for (let x = -150; x <= 150; x += blockSize) {
+                const roadCenterX = x + blockSize/2;
+                if (roadCenterX > 160) continue;
+                if (Math.random() > 0.3) spawnCarRow(false, true, roadCenterX, range);
+                if (Math.random() > 0.3) spawnCarRow(false, false, roadCenterX, range);
+            }
+        }
+
+        function spawnCarRow(isXAxis, isPositiveDir, roadCoord, range) {
+            const count = 1 + Math.floor(Math.random() * 2);
+            for(let i=0; i<count; i++) {
+                const car = createCarMesh();
+                const posAlong = (Math.random() - 0.5) * 2 * range;
+                const laneOffset = 2.5; 
+                if (isXAxis) {
+                    car.position.set(posAlong, 0, roadCoord + (isPositiveDir ? laneOffset : -laneOffset));
+                    car.rotation.y = isPositiveDir ? -Math.PI/2 : Math.PI/2;
+                } else {
+                    car.position.set(roadCoord + (isPositiveDir ? -laneOffset : laneOffset), 0, posAlong);
+                    car.rotation.y = isPositiveDir ? Math.PI : 0;
+                }
+                car.userData = {
+                    velocity: new THREE.Vector3(isXAxis ? (isPositiveDir ? 1 : -1) : 0, 0, isXAxis ? 0 : (isPositiveDir ? 1 : -1)),
+                    baseSpeed: 0.15 + Math.random() * 0.15, 
+                    speed: 0, 
+                    limit: range + 20,
+                    width: car.userData.width,
+                    length: car.userData.length
+                };
+                car.userData.speed = car.userData.baseSpeed;
+                scene.add(car);
+                cars.push(car);
+            }
+        }
+
+        function createCarMesh() {
+            const type = Math.random();
+            const carGroup = new THREE.Group();
+            const color = [0xd32f2f, 0x1976d2, 0x388e3c, 0xfbc02d, 0xffffff, 0x333333][Math.floor(Math.random()*6)];
+            const matBody = new THREE.MeshStandardMaterial({ color: color, roughness: 0.3, metalness: 0.3 });
+            const matDark = new THREE.MeshStandardMaterial({ color: 0x222222 }); 
+            const matLight = new THREE.MeshBasicMaterial({ color: 0xffffaa }); 
+            let w, l;
+            if (type < 0.5) {
+                w = 1.8; l = 3.8;
+                const chassis = new THREE.Mesh(createBox(w, 0.7, l, 0.2), matBody);
+                chassis.position.y = 0.5; chassis.castShadow = true; carGroup.add(chassis);
+                const cabin = new THREE.Mesh(createBox(1.6, 0.6, 2.0, 0.1), matDark);
+                cabin.position.set(0, 1.0, -0.2); carGroup.add(cabin);
+            } else if (type < 0.8) {
+                w = 2.0; l = 5.0;
+                const chassis = new THREE.Mesh(createBox(w, 1.0, l, 0.1), matBody);
+                chassis.position.y = 0.8; chassis.castShadow = true; carGroup.add(chassis);
+                const cabin = new THREE.Mesh(createBox(1.8, 0.8, 1.2, 0.1), matDark);
+                cabin.position.set(0, 1.5, -1.5); carGroup.add(cabin);
+            } else {
+                w = 1.6; l = 2.5;
+                const chassis = new THREE.Mesh(createBox(w, 0.8, l, 0.2), matBody);
+                chassis.position.y = 0.6; chassis.castShadow = true; carGroup.add(chassis);
+                const cabin = new THREE.Mesh(createBox(1.4, 0.5, 1.2, 0.1), matDark);
+                cabin.position.set(0, 1.1, -0.2); carGroup.add(cabin);
+            }
+            carGroup.userData.width = w;
+            carGroup.userData.length = l;
+            const wGeo = createBox(0.4, 0.4, 0.8, 0.2);
+            const wheelZ = l * 0.35; const wheelX = w * 0.5;
+            [[-wheelX, 0.3, -wheelZ], [wheelX, 0.3, -wheelZ], [-wheelX, 0.3, wheelZ], [wheelX, 0.3, wheelZ]].forEach(pos => {
+                const w = new THREE.Mesh(wGeo, matDark); w.position.set(...pos); carGroup.add(w);
+            });
+            const lGeo = new THREE.BoxGeometry(0.4, 0.2, 0.1);
+            const l1 = new THREE.Mesh(lGeo, matLight); l1.position.set(-w*0.3, 0.6, -l/2); carGroup.add(l1);
+            const l2 = new THREE.Mesh(lGeo, matLight); l2.position.set(w*0.3, 0.6, -l/2); carGroup.add(l2);
+            return carGroup;
+        }
+
+        // --- NPC SYSTEM ---
+        function createNPCs(count) {
+            if (cityMap.sidewalks.length === 0) return;
+
+            for(let i=0; i<count; i++) {
+                // Random Color
+                const hue = Math.random();
+                const color = new THREE.Color().setHSL(hue, 0.7, 0.5);
+                
+                const npc = createRobot(color);
+                
+                // Pick random sidewalk
+                const sw = cityMap.sidewalks[Math.floor(Math.random() * cityMap.sidewalks.length)];
+                // Pick random point on sidewalk (with padding)
+                const x = sw.minX + 2 + Math.random() * (sw.maxX - sw.minX - 4);
+                const z = sw.minZ + 2 + Math.random() * (sw.maxZ - sw.minZ - 4);
+
+                npc.position.set(x, 0.2, z); // Sidewalk height
+
+                // Initialize NPC Data
+                npc.userData.isNPC = true;
+                npc.userData.speed = 0.03 + Math.random() * 0.03;
+                npc.userData.target = new THREE.Vector3(x, 0.2, z);
+                npc.userData.state = 'idle';
+                npc.userData.timer = Math.random() * 2000;
+                npc.userData.animTime = Math.random() * 100;
+
+                scene.add(npc);
+                npcRobots.push(npc);
+            }
+        }
+
+        function updateNPCs() {
+            npcRobots.forEach(npc => {
+                const data = npc.userData;
+                const rig = data.rig;
+
+                // Simple State Machine
+                if (data.state === 'idle') {
+                    // IDLE
+                    data.timer -= 16; // Approx ms per frame
+                    if (data.timer <= 0) {
+                        // Pick new target
+                        const sw = cityMap.sidewalks[Math.floor(Math.random() * cityMap.sidewalks.length)];
+                        data.target.x = sw.minX + 2 + Math.random() * (sw.maxX - sw.minX - 4);
+                        data.target.z = sw.minZ + 2 + Math.random() * (sw.maxZ - sw.minZ - 4);
+                        data.state = 'walk';
+                    }
+                    
+                    // Reset Limbs to idle
+                    const resetSpeed = 0.1;
+                    rig.leftLeg.upper.rotation.x = THREE.MathUtils.lerp(rig.leftLeg.upper.rotation.x, 0, resetSpeed);
+                    rig.rightLeg.upper.rotation.x = THREE.MathUtils.lerp(rig.rightLeg.upper.rotation.x, 0, resetSpeed);
+                    rig.leftLeg.lower.rotation.x = THREE.MathUtils.lerp(rig.leftLeg.lower.rotation.x, 0, resetSpeed);
+                    rig.rightLeg.lower.rotation.x = THREE.MathUtils.lerp(rig.rightLeg.lower.rotation.x, 0, resetSpeed);
+                    rig.leftArm.upper.rotation.x = THREE.MathUtils.lerp(rig.leftArm.upper.rotation.x, 0, resetSpeed);
+                    rig.rightArm.upper.rotation.x = THREE.MathUtils.lerp(rig.rightArm.upper.rotation.x, 0, resetSpeed);
+                    rig.leftArm.lower.rotation.x = THREE.MathUtils.lerp(rig.leftArm.lower.rotation.x, -0.1, resetSpeed); 
+                    rig.rightArm.lower.rotation.x = THREE.MathUtils.lerp(rig.rightArm.lower.rotation.x, -0.1, resetSpeed);
+
+                } else {
+                    // WALK
+                    const dist = npc.position.distanceTo(data.target);
+                    if (dist < 0.5) {
+                        data.state = 'idle';
+                        data.timer = 1000 + Math.random() * 3000;
+                    } else {
+                        // Move
+                        const dir = new THREE.Vector3().subVectors(data.target, npc.position).normalize();
+                        npc.position.addScaledVector(dir, data.speed);
+                        
+                        // Rotate
+                        const targetRot = Math.atan2(dir.x, dir.z);
+                        let rotDiff = targetRot - npc.rotation.y;
+                        while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
+                        while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
+                        npc.rotation.y += rotDiff * 0.1;
+
+                        // Animate
+                        data.animTime += 0.24; // Walk speed scale
+                        const walkAmp = 0.8;
+                        
+                        rig.leftLeg.upper.rotation.x = -Math.sin(data.animTime) * walkAmp;
+                        rig.rightLeg.upper.rotation.x = -Math.sin(data.animTime + Math.PI) * walkAmp;
+                        rig.leftLeg.lower.rotation.x = Math.max(0, Math.cos(data.animTime)) * 1.2;
+                        rig.rightLeg.lower.rotation.x = Math.max(0, Math.cos(data.animTime + Math.PI)) * 1.2;
+                        rig.leftArm.upper.rotation.x = Math.sin(data.animTime) * walkAmp;
+                        rig.rightArm.upper.rotation.x = Math.sin(data.animTime + Math.PI) * walkAmp;
+                    }
+                    
+                    // Height adjustment (Step up/down)
+                    const groundH = getGroundHeight(npc.position.x, npc.position.z);
+                    npc.position.y = THREE.MathUtils.lerp(npc.position.y, groundH, 0.2);
+                }
+            });
+        }
+
         function initAudio() {
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -297,10 +492,8 @@
             }
         }
 
-        // --- PHYSICS & COLLISION HELPERS ---
-
         function getGroundHeight(x, z) {
-            let h = 0.02; // Road level
+            let h = 0.02; 
             for (let sw of cityMap.sidewalks) {
                 if (x >= sw.minX && x <= sw.maxX && z >= sw.minZ && z <= sw.maxZ) {
                     h = Math.max(h, sw.height);
@@ -320,7 +513,63 @@
             return false;
         }
 
-        // --- Touch Handlers ---
+        function updateTraffic() {
+            const stopDist = 4.0; 
+
+            cars.forEach(car => {
+                const rot = Math.abs(car.rotation.y);
+                const isZAligned = (rot < 0.1 || Math.abs(rot - Math.PI) < 0.1);
+                
+                let boxW, boxD;
+                if (isZAligned) {
+                    boxW = car.userData.width;
+                    boxD = car.userData.length;
+                } else {
+                    boxW = car.userData.length;
+                    boxD = car.userData.width;
+                }
+
+                const buffer = 0.8; 
+                const minX = car.position.x - boxW/2 - buffer;
+                const maxX = car.position.x + boxW/2 + buffer;
+                const minZ = car.position.z - boxD/2 - buffer;
+                const maxZ = car.position.z + boxD/2 + buffer;
+
+                const isHit = (smartY.position.x >= minX && smartY.position.x <= maxX && 
+                               smartY.position.z >= minZ && smartY.position.z <= maxZ);
+
+                const vecToSmartY = new THREE.Vector3().subVectors(smartY.position, car.position);
+                const distance = vecToSmartY.length();
+                
+                vecToSmartY.normalize();
+                const forward = car.userData.velocity.clone().normalize();
+                const angle = vecToSmartY.dot(forward);
+                
+                const shouldStop = isHit || (distance < stopDist && angle > 0.7);
+
+                if (shouldStop) {
+                    if (isHit) {
+                        car.userData.speed = 0;
+                    } else {
+                        car.userData.speed = THREE.MathUtils.lerp(car.userData.speed, 0, 0.1);
+                    }
+                } else {
+                    car.userData.speed = THREE.MathUtils.lerp(car.userData.speed, car.userData.baseSpeed, 0.05);
+                }
+
+                car.position.x += car.userData.velocity.x * car.userData.speed;
+                car.position.z += car.userData.velocity.z * car.userData.speed;
+
+                const limit = car.userData.limit;
+                
+                if (car.position.x > limit) car.position.x = -limit;
+                if (car.position.x < -limit) car.position.x = limit;
+                if (car.position.z > limit) car.position.z = -limit;
+                if (car.position.z < -limit) car.position.z = limit;
+            });
+        }
+
+        // --- Touch Handlers (Same as before) ---
         function handleTouchStart(e) {
             e.preventDefault();
             initAudio();
@@ -426,42 +675,63 @@
             return new RoundedBoxGeometry(w, h, d, 4, radius);
         }
 
-        function createSmartY() {
-            smartY = new THREE.Group();
-            smartY.scale.set(BASE_SCALE, BASE_SCALE, BASE_SCALE);
+        // --- NEW: REUSABLE ROBOT CREATOR ---
+        function createRobot(colorHex) {
+            const robotGroup = new THREE.Group();
+            robotGroup.scale.set(BASE_SCALE, BASE_SCALE, BASE_SCALE);
 
-            const blueMat = new THREE.MeshStandardMaterial({ color: 0x2196F3, roughness: 0.3 });
+            const color = new THREE.Color(colorHex);
+            const mainMat = new THREE.MeshStandardMaterial({ color: color, roughness: 0.3 });
             const darkGreyMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
             const whiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
             const blackMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
 
-            const torso = new THREE.Group();
-            // [FIXED] Raised torso position so feet bottom is at y=0
-            torso.position.y = 2.56; 
-            smartY.add(torso);
+            // Initialize Rig data structure for this instance
+            const localRig = {
+                leftArm: { upper: null, lower: null },
+                rightArm: { upper: null, lower: null },
+                leftLeg: { upper: null, lower: null },
+                rightLeg: { upper: null, lower: null },
+                head: null,
+                chest: null,
+                mouth: null
+            };
+            robotGroup.userData.rig = localRig;
 
-            const pelvis = new THREE.Mesh(createBox(1, 0.4, 0.6), blueMat);
+            const torso = new THREE.Group();
+            torso.position.y = 2.56; 
+            robotGroup.add(torso);
+
+            const pelvis = new THREE.Mesh(createBox(1, 0.4, 0.6), mainMat);
             pelvis.position.y = -0.57; pelvis.castShadow = true; torso.add(pelvis);
 
             const waist = new THREE.Mesh(createBox(0.85, 0.12, 0.45), darkGreyMat);
             waist.position.y = -0.31; waist.castShadow = true; torso.add(waist);
 
-            const chest = new THREE.Mesh(createBox(1, 1.0, 0.6), blueMat);
+            const chest = new THREE.Mesh(createBox(1, 1.0, 0.6), mainMat);
             chest.position.y = 0.25; chest.castShadow = true; torso.add(chest);
-            rig.chest = chest;
+            localRig.chest = chest;
 
-            const head = new THREE.Mesh(createBox(1.2, 1, 1), blueMat);
+            const head = new THREE.Mesh(createBox(1.2, 1, 1), mainMat);
             head.position.y = 1.4; head.castShadow = true; torso.add(head);
-            rig.head = head;
+            localRig.head = head;
 
             const eyeGeo = new THREE.PlaneGeometry(0.25, 0.25);
             const leftEye = new THREE.Mesh(eyeGeo, whiteMat); leftEye.position.set(-0.25, 0.15, 0.51); head.add(leftEye);
-            leftPupil = new THREE.Mesh(new THREE.PlaneGeometry(0.1, 0.1), blackMat); leftPupil.position.z = 0.01; leftPupil.position.y = 0.05; leftEye.add(leftPupil);
+            const leftPupil = new THREE.Mesh(new THREE.PlaneGeometry(0.1, 0.1), blackMat); leftPupil.position.z = 0.01; leftPupil.position.y = 0.05; leftEye.add(leftPupil);
             
             const rightEye = new THREE.Mesh(eyeGeo, whiteMat); rightEye.position.set(0.25, 0.15, 0.51); head.add(rightEye);
-            rightPupil = new THREE.Mesh(new THREE.PlaneGeometry(0.1, 0.1), blackMat); rightPupil.position.z = 0.01; rightPupil.position.y = 0.05; rightEye.add(rightPupil);
+            const rightPupil = new THREE.Mesh(new THREE.PlaneGeometry(0.1, 0.1), blackMat); rightPupil.position.z = 0.01; rightPupil.position.y = 0.05; rightEye.add(rightPupil);
+            
+            // Expose pupils for animation if this is SmartY
+            robotGroup.userData.leftPupil = leftPupil;
+            robotGroup.userData.rightPupil = rightPupil;
 
-            const mouthGroup = new THREE.Group(); mouthGroup.position.set(0, -0.2, 0.51); head.add(mouthGroup);
+            const mouthGroup = new THREE.Group(); 
+            mouthGroup.position.set(0, -0.2, 0.51); 
+            head.add(mouthGroup);
+            localRig.mouth = mouthGroup;
+
             const mouthPixelGeo = new THREE.BoxGeometry(0.06, 0.06, 0.02);
             [[-0.16, 0.05], [-0.09, 0], [0, -0.05], [0.09, 0], [0.16, 0.05]].forEach(pos => {
                 const m = new THREE.Mesh(mouthPixelGeo, blackMat); m.position.set(pos[0], pos[1], 0); mouthGroup.add(m);
@@ -472,20 +742,20 @@
             const antBulb = new THREE.Mesh(createBox(0.15, 0.15, 0.15), new THREE.MeshBasicMaterial({color: 0xff0000})); 
             antBulb.position.y = 0.2; antStem.add(antBulb);
 
-            function createArticulatedLimb(isArm, rigTarget) {
+            function createArticulatedLimb(isArm, targetRef) {
                 const limbAnchor = new THREE.Group();
                 const width = isArm ? 0.25 : 0.3;
                 const upperLen = isArm ? 0.5 : 0.7;
                 const lowerLen = isArm ? 0.5 : 0.7;
                 const jointSize = width * 0.8;
 
-                const upper = new THREE.Mesh(createBox(width, upperLen, width), blueMat);
+                const upper = new THREE.Mesh(createBox(width, upperLen, width), mainMat);
                 upper.position.y = -upperLen / 2; upper.castShadow = true; limbAnchor.add(upper);
 
                 const lowerPivot = new THREE.Group(); lowerPivot.position.y = -upperLen; limbAnchor.add(lowerPivot);
                 const joint = new THREE.Mesh(createBox(jointSize, jointSize, jointSize), darkGreyMat); lowerPivot.add(joint);
 
-                const lower = new THREE.Mesh(createBox(width, lowerLen, width), blueMat);
+                const lower = new THREE.Mesh(createBox(width, lowerLen, width), mainMat);
                 lower.position.y = - (lowerLen / 2) - (jointSize / 2); lower.castShadow = true; lowerPivot.add(lower);
 
                 if (isArm) {
@@ -503,132 +773,163 @@
                     const foot = new THREE.Mesh(createBox(width * 1.1, 0.2, width * 2), darkGreyMat);
                     foot.position.y = -lowerLen - jointSize - 0.1; foot.position.z = width * 0.5; lowerPivot.add(foot);
                 }
-                rigTarget.upper = limbAnchor; rigTarget.lower = lowerPivot;
+                
+                targetRef.upper = limbAnchor;
+                targetRef.lower = lowerPivot;
+
                 return limbAnchor;
             }
 
-            const leftArm = createArticulatedLimb(true, rig.leftArm); leftArm.position.set(-0.7, 0.6, 0); torso.add(leftArm);
-            const rightArm = createArticulatedLimb(true, rig.rightArm); rightArm.position.set(0.7, 0.6, 0); torso.add(rightArm);
-            const leftLeg = createArticulatedLimb(false, rig.leftLeg); leftLeg.position.set(-0.3, -0.72, 0); torso.add(leftLeg);
-            const rightLeg = createArticulatedLimb(false, rig.rightLeg); rightLeg.position.set(0.3, -0.72, 0); torso.add(rightLeg);
+            const leftArm = createArticulatedLimb(true, localRig.leftArm); leftArm.position.set(-0.7, 0.6, 0); torso.add(leftArm);
+            const rightArm = createArticulatedLimb(true, localRig.rightArm); rightArm.position.set(0.7, 0.6, 0); torso.add(rightArm);
+            const leftLeg = createArticulatedLimb(false, localRig.leftLeg); leftLeg.position.set(-0.3, -0.72, 0); torso.add(leftLeg);
+            const rightLeg = createArticulatedLimb(false, localRig.rightLeg); rightLeg.position.set(0.3, -0.72, 0); torso.add(rightLeg);
 
-            scene.add(smartY);
+            return robotGroup;
         }
 
         function createParrot() {
+            // ... (Same as before) ...
             parrot = new THREE.Group();
-
             const greenMat = new THREE.MeshStandardMaterial({ color: 0x4CAF50 });
             const redMat = new THREE.MeshStandardMaterial({ color: 0xF44336 });
             const yellowMat = new THREE.MeshStandardMaterial({ color: 0xFFEB3B });
             const blackMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
-
-            parrot.userData = { 
-                lWing: null, rWing: null, state: 0, targetPos: new THREE.Vector3(),
-                targetObj: null, nextActionTime: 0, landingOffset: new THREE.Vector3(), 
-                armPose: { z: 0, x: 0 } 
-            };
-
-            // Use rounded boxes for Parrot too
-            const body = new THREE.Mesh(createBox(0.15, 0.2, 0.25, 0.04), greenMat);
-            body.castShadow = true; parrot.add(body);
-
-            // Head facing +Z
-            const head = new THREE.Mesh(createBox(0.12, 0.12, 0.12, 0.03), greenMat);
-            head.position.set(0, 0.15, 0.1); 
-            head.castShadow = true; parrot.add(head);
-
-            const beak = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.08, 8), yellowMat);
-            beak.rotation.x = Math.PI / 2; 
-            beak.position.set(0, 0, 0.08); 
-            head.add(beak);
-
+            parrot.userData = { lWing: null, rWing: null, state: 0, targetPos: new THREE.Vector3(), targetObj: null, nextActionTime: 0, landingOffset: new THREE.Vector3(), armPose: { z: 0, x: 0 } };
+            const body = new THREE.Mesh(createBox(0.15, 0.2, 0.25, 0.04), greenMat); body.castShadow = true; parrot.add(body);
+            const head = new THREE.Mesh(createBox(0.12, 0.12, 0.12, 0.03), greenMat); head.position.set(0, 0.15, 0.1); head.castShadow = true; parrot.add(head);
+            const beak = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.08, 8), yellowMat); beak.rotation.x = -Math.PI / 2; beak.position.set(0, 0, 0.08); head.add(beak);
             const eyeGeo = new THREE.PlaneGeometry(0.03, 0.03);
             const leftEye = new THREE.Mesh(eyeGeo, blackMat); leftEye.position.set(-0.061, 0.02, 0.02); leftEye.rotation.y = -Math.PI / 2; head.add(leftEye);
             const rightEye = new THREE.Mesh(eyeGeo, blackMat); rightEye.position.set(0.061, 0.02, 0.02); rightEye.rotation.y = Math.PI / 2; head.add(rightEye);
-
             const wingGeo = createBox(0.25, 0.02, 0.15, 0.01);
-            
             const lWingGroup = new THREE.Group(); lWingGroup.position.set(-0.08, 0.05, 0); parrot.add(lWingGroup);
             const lWing = new THREE.Mesh(wingGeo, redMat); lWing.position.x = -0.125; lWing.castShadow = true; lWingGroup.add(lWing);
-
             const rWingGroup = new THREE.Group(); rWingGroup.position.set(0.08, 0.05, 0); parrot.add(rWingGroup);
             const rWing = new THREE.Mesh(wingGeo, redMat); rWing.position.x = 0.125; rWing.castShadow = true; rWingGroup.add(rWing);
-
-            // Tail facing -Z
-            const tail = new THREE.Mesh(createBox(0.1, 0.02, 0.2, 0.01), redMat);
-            tail.position.set(0, -0.05, -0.2); 
-            tail.castShadow = true; parrot.add(tail);
-
-            parrot.userData.lWing = lWingGroup;
-            parrot.userData.rWing = rWingGroup;
-
-            parrot.position.set(2, 3, 2);
-            scene.add(parrot);
+            const tail = new THREE.Mesh(createBox(0.1, 0.02, 0.2, 0.01), redMat); tail.position.set(0, -0.05, -0.2); tail.castShadow = true; parrot.add(tail);
+            parrot.userData.lWing = lWingGroup; parrot.userData.rWing = rWingGroup;
+            parrot.position.set(2, 3, 2); scene.add(parrot);
         }
 
         function createCity() {
-            const cityGroup = new THREE.Group();
-            scene.add(cityGroup);
-
+            // ... (Same as before) ...
+            const cityGroup = new THREE.Group(); scene.add(cityGroup);
+            const matConcrete = new THREE.MeshStandardMaterial({ color: 0x999999, roughness: 0.9 }); 
+            const matBrick = new THREE.MeshStandardMaterial({ color: 0x885544, roughness: 0.9 }); 
+            const matOfficeGlass = new THREE.MeshStandardMaterial({ color: 0x5588aa, roughness: 0.2, metalness: 0.5 });
+            const matDarkSteel = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.4 });
             const matGrey = new THREE.MeshStandardMaterial({ color: 0x888888 });
             const matDarkGrey = new THREE.MeshStandardMaterial({ color: 0x555555 });
             const matBlueGlass = new THREE.MeshStandardMaterial({ color: 0x88CCFF });
             const matSidewalk = new THREE.MeshStandardMaterial({ color: 0x999999 }); 
             const matRoadLine = new THREE.MeshBasicMaterial({ color: 0xFFFFFF }); 
+            const matDoor = new THREE.MeshStandardMaterial({ color: 0x3a2c21 }); 
+            const matDoorFrame = new THREE.MeshStandardMaterial({ color: 0x222222 });
+            const matWinLit = new THREE.MeshStandardMaterial({ color: 0xffffcc, emissive: 0x555500, emissiveIntensity: 0.5 }); 
+            const matWinDark = new THREE.MeshStandardMaterial({ color: 0x111122 });
+            const matWinOffice = new THREE.MeshStandardMaterial({ color: 0x88ccff, emissive: 0x112244, roughness: 0.1 });
+            const matTreeTrunk = new THREE.MeshStandardMaterial({ color: 0x5D4037 });
+            const matTreeLeaves = new THREE.MeshStandardMaterial({ color: 0x4CAF50 });
+            const matGrass = new THREE.MeshStandardMaterial({ color: 0x66bb66, roughness: 1.0 });
+            const matWater = new THREE.MeshStandardMaterial({ color: 0x44aaff, roughness: 0.1 });
+            const matBench = new THREE.MeshStandardMaterial({ color: 0x8d6e63 });
+            const matFountainStone = new THREE.MeshStandardMaterial({ color: 0xaaaaaa });
+            const matPole = new THREE.MeshStandardMaterial({ color: 0x222222 });
+            const matLightBox = new THREE.MeshStandardMaterial({ color: 0x111111 });
+            const matRed = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+            const matYellow = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+            const matGreen = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
 
-            const blockSize = 30; 
-            const streetWidth = 10; 
-            const buildingArea = blockSize - streetWidth; 
-            const sidewalkHeight = 0.2;
+            const blockSize = 30; const streetWidth = 10; const buildingArea = blockSize - streetWidth; const sidewalkHeight = 0.2;
             
             for(let x = -150; x <= 150; x += blockSize) {
                 for(let z = -150; z <= 150; z += blockSize) {
-                    
-                    const dist = Math.sqrt(x*x + z*z);
-                    if(dist < 25) continue;
-
+                    const dist = Math.sqrt(x*x + z*z); if(dist < 25) continue;
                     const swGeo = createBox(buildingArea, sidewalkHeight, buildingArea, 0.1);
                     const sidewalk = new THREE.Mesh(swGeo, matSidewalk);
-                    sidewalk.position.set(x, sidewalkHeight/2, z);
-                    sidewalk.receiveShadow = true;
-                    cityGroup.add(sidewalk);
+                    sidewalk.position.set(x, sidewalkHeight/2, z); sidewalk.receiveShadow = true; cityGroup.add(sidewalk);
+                    cityMap.sidewalks.push({ minX: x - buildingArea/2, maxX: x + buildingArea/2, minZ: z - buildingArea/2, maxZ: z + buildingArea/2, height: sidewalkHeight });
 
-                    cityMap.sidewalks.push({
-                        minX: x - buildingArea/2, maxX: x + buildingArea/2,
-                        minZ: z - buildingArea/2, maxZ: z + buildingArea/2,
-                        height: sidewalkHeight
-                    });
+                    if (Math.random() > 0.25) {
+                        const isOffice = Math.random() > 0.6;
+                        let h, w, d, matBody, winMat, hasRows;
+                        if (isOffice) {
+                            h = 20 + Math.random() * 25; w = buildingArea * (0.6 + Math.random() * 0.3); d = buildingArea * (0.6 + Math.random() * 0.3);
+                            matBody = Math.random() > 0.5 ? matOfficeGlass : matDarkSteel; winMat = matWinOffice; hasRows = true; 
+                        } else {
+                            h = 8 + Math.random() * 10; w = buildingArea * (0.7 + Math.random() * 0.2); d = buildingArea * (0.5 + Math.random() * 0.3);
+                            matBody = Math.random() > 0.5 ? matConcrete : matBrick; winMat = null; hasRows = false; 
+                        }
+                        const bGeo = createBox(w, h, d, 0.2); const building = new THREE.Mesh(bGeo, matBody);
+                        building.position.set(x, h/2 + sidewalkHeight, z); building.castShadow = true; building.receiveShadow = true; cityGroup.add(building);
+                        cityMap.buildings.push({ minX: x - w/2, maxX: x + w/2, minZ: z - d/2, maxZ: z + d/2 });
+                        
+                        const doorGeo = createBox(1.8, 2.5, 0.2, 0.05); const door = new THREE.Mesh(doorGeo, matDoor); door.position.set(0, -h/2 + 1.35, d/2 + 0.05); building.add(door);
+                        const awningGeo = createBox(2.3, 0.2, 1.0, 0.05); const awning = new THREE.Mesh(awningGeo, matDoorFrame); awning.position.set(0, -h/2 + 2.7, d/2 + 0.3); building.add(awning);
 
-                    if (Math.random() > 0.15) {
-                        const h = 5 + Math.random() * 20; 
-                        const w = buildingArea * 0.7; 
-                        const d = buildingArea * 0.7; 
-                        const randMat = Math.random() > 0.5 ? matGrey : (Math.random() > 0.5 ? matDarkGrey : matBlueGlass);
-                        const bGeo = createBox(w, h, d, 0.2);
-                        const building = new THREE.Mesh(bGeo, randMat);
-                        building.position.set(x, h/2 + sidewalkHeight, z); 
-                        building.castShadow = true;
-                        building.receiveShadow = true;
-                        cityGroup.add(building);
-
-                        cityMap.buildings.push({
-                            minX: x - w/2, maxX: x + w/2,
-                            minZ: z - d/2, maxZ: z + d/2
-                        });
+                        if (isOffice) {
+                            const floors = Math.floor(h / 4); const winGeo = createBox(w * 0.9, 2.5, 0.1, 0.05);
+                            for(let f = 1; f < floors; f++) {
+                                const yPos = -h/2 + f * 4; const winF = new THREE.Mesh(winGeo, winMat); winF.position.set(0, yPos, d/2 + 0.05); building.add(winF);
+                                const winB = winF.clone(); winB.position.set(0, yPos, -d/2 - 0.05); building.add(winB);
+                            }
+                        } else {
+                            const floorHeight = 3; const floors = Math.floor((h - 3) / floorHeight); const windowSpacing = 2.5; const cols = Math.floor((w - 2) / windowSpacing); const winGeo = createBox(1.2, 1.5, 0.1, 0.05);
+                            for(let f = 1; f <= floors; f++) {
+                                const yPos = -h/2 + 1.5 + (f * floorHeight); 
+                                for(let c = 0; c < cols; c++) {
+                                    const xPos = -(cols * windowSpacing)/2 + (c * windowSpacing) + windowSpacing/2; const thisWinMat = Math.random() > 0.4 ? matWinDark : matWinLit;
+                                    const winF = new THREE.Mesh(winGeo, thisWinMat); winF.position.set(xPos, yPos, d/2 + 0.05); building.add(winF);
+                                    const winB = new THREE.Mesh(winGeo, thisWinMat); winB.position.set(xPos, yPos, -d/2 - 0.05); building.add(winB);
+                                }
+                            }
+                        }
+                    } else {
+                        const grassGeo = createBox(buildingArea * 0.85, 0.1, buildingArea * 0.85, 0.05); const grass = new THREE.Mesh(grassGeo, matGrass);
+                        grass.position.set(x, sidewalkHeight + 0.05, z); grass.receiveShadow = true; cityGroup.add(grass);
+                        if (Math.random() > 0.5) {
+                            const fBase = new THREE.Mesh(new THREE.CylinderGeometry(2, 2.5, 0.5, 12), matFountainStone); fBase.position.set(x, sidewalkHeight + 0.25, z); fBase.castShadow = true; cityGroup.add(fBase);
+                            const water = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 0.1, 12), matWater); water.position.set(x, sidewalkHeight + 0.5, z); cityGroup.add(water);
+                            const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.6, 1.5, 8), matFountainStone); pillar.position.set(x, sidewalkHeight + 1.0, z); pillar.castShadow = true; cityGroup.add(pillar);
+                            cityMap.buildings.push({ minX: x - 2, maxX: x + 2, minZ: z - 2, maxZ: z + 2 });
+                        } else {
+                            const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.9, 2.5, 8), matTreeTrunk); trunk.position.set(x, sidewalkHeight + 1.25, z); trunk.castShadow = true; cityGroup.add(trunk);
+                            const leaves = new THREE.Mesh(new THREE.DodecahedronGeometry(3.5), matTreeLeaves); leaves.position.set(x, sidewalkHeight + 3.5, z); leaves.castShadow = true; cityGroup.add(leaves);
+                            cityMap.buildings.push({ minX: x - 1, maxX: x + 1, minZ: z - 1, maxZ: z + 1 });
+                        }
+                        const benchGeo = createBox(2, 0.4, 0.6, 0.05); const dist = 4.5;
+                        const b1 = new THREE.Mesh(benchGeo, matBench); b1.position.set(x, sidewalkHeight + 0.2, z - dist); b1.castShadow = true; cityGroup.add(b1);
+                        const b2 = new THREE.Mesh(benchGeo, matBench); b2.position.set(x, sidewalkHeight + 0.2, z + dist); b2.castShadow = true; cityGroup.add(b2);
+                        const b3 = new THREE.Mesh(benchGeo, matBench); b3.rotation.y = Math.PI / 2; b3.position.set(x - dist, sidewalkHeight + 0.2, z); b3.castShadow = true; cityGroup.add(b3);
+                        const b4 = new THREE.Mesh(benchGeo, matBench); b4.rotation.y = Math.PI / 2; b4.position.set(x + dist, sidewalkHeight + 0.2, z); b4.castShadow = true; cityGroup.add(b4);
+                        const bushGeo = new THREE.SphereGeometry(0.8, 7, 7);
+                        [[x-6, z-6], [x+6, z-6], [x-6, z+6], [x+6, z+6]].forEach(pos => { const bush = new THREE.Mesh(bushGeo, matTreeLeaves); bush.position.set(pos[0], sidewalkHeight + 0.4, pos[1]); bush.castShadow = true; cityGroup.add(bush); });
                     }
 
-                    const lineGeoX = new THREE.PlaneGeometry(blockSize, 0.15);
-                    const lineX = new THREE.Mesh(lineGeoX, matRoadLine);
-                    lineX.rotation.x = -Math.PI/2;
-                    lineX.position.set(x + blockSize/2, 0.02, z); 
-                    cityGroup.add(lineX);
-
-                    const lineGeoZ = new THREE.PlaneGeometry(0.15, blockSize);
-                    const lineZ = new THREE.Mesh(lineGeoZ, matRoadLine);
-                    lineZ.rotation.x = -Math.PI/2;
-                    lineZ.position.set(x, 0.02, z + blockSize/2);
-                    cityGroup.add(lineZ);
+                    if (Math.random() > 0.4) {
+                        const tCount = 1 + Math.floor(Math.random() * 2);
+                        for(let t=0; t<tCount; t++) {
+                            const tree = new THREE.Group();
+                            const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.4, 2, 8), matTreeTrunk); trunk.position.y = 1 + sidewalkHeight; trunk.castShadow = true; tree.add(trunk);
+                            const leaves = new THREE.Mesh(new THREE.ConeGeometry(1.5, 3, 8), matTreeLeaves); leaves.position.y = 3.5 + sidewalkHeight; leaves.castShadow = true; tree.add(leaves);
+                            const side = Math.random() > 0.5 ? 1 : -1; const isZEdge = Math.random() > 0.5; let tx = x, tz = z;
+                            if (isZEdge) { tx += (Math.random() - 0.5) * 16; tz += side * 9; } else { tx += side * 9; tz += (Math.random() - 0.5) * 16; }
+                            tree.position.set(tx, 0, tz); cityGroup.add(tree);
+                        }
+                    }
+                    if (Math.random() > 0.2) {
+                        const tlGroup = new THREE.Group();
+                        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 5, 8), matPole); pole.position.y = 2.5; tlGroup.add(pole);
+                        const box = new THREE.Mesh(createBox(0.8, 1.8, 0.5), matLightBox); box.position.y = 4; tlGroup.add(box);
+                        const lightGeo = new THREE.SphereGeometry(0.2, 8, 8);
+                        const lRed = new THREE.Mesh(lightGeo, matRed); lRed.position.set(0, 4.5, 0.25); tlGroup.add(lRed);
+                        const lYel = new THREE.Mesh(lightGeo, matYellow); lYel.position.set(0, 4.0, 0.25); tlGroup.add(lYel);
+                        const lGrn = new THREE.Mesh(lightGeo, matGreen); lGrn.position.set(0, 3.5, 0.25); tlGroup.add(lGrn);
+                        tlGroup.position.set(x + 9.5, sidewalkHeight, z + 9.5); tlGroup.lookAt(x + 15, sidewalkHeight, z + 15); cityGroup.add(tlGroup);
+                    }
+                    const lineGeoX = new THREE.PlaneGeometry(blockSize, 0.15); const lineX = new THREE.Mesh(lineGeoX, matRoadLine); lineX.rotation.x = -Math.PI/2; lineX.position.set(x + blockSize/2, 0.02, z); cityGroup.add(lineX);
+                    const lineGeoZ = new THREE.PlaneGeometry(0.15, blockSize); const lineZ = new THREE.Mesh(lineGeoZ, matRoadLine); lineZ.rotation.x = -Math.PI/2; lineZ.position.set(x, 0.02, z + blockSize/2); cityGroup.add(lineZ);
                 }
             }
         }
@@ -641,10 +942,13 @@
 
         function animate() {
             requestAnimationFrame(animate);
+            if (cars.length > 0) updateTraffic(); 
+            if (npcRobots.length > 0) updateNPCs(); // Update NPCs
 
             let holdingParrot = null; 
 
             if (parrot && smartY) {
+                // ... (Parrot AI Logic - no changes needed here) ...
                 const now = Date.now();
                 const pData = parrot.userData;
                 const pTime = now * 0.002;
@@ -668,26 +972,17 @@
                             const radius = isExploring ? 8 + Math.random() * 7 : 3 + Math.random() * 2;
                             const angle = Math.random() * Math.PI * 2;
                             const height = 4 + Math.random() * 10; 
-                            pData.targetPos.set(
-                                smartY.position.x + Math.sin(angle) * radius,
-                                smartY.position.y + height,
-                                smartY.position.z + Math.cos(angle) * radius
-                            );
+                            pData.targetPos.set(smartY.position.x + Math.sin(angle) * radius, smartY.position.y + height, smartY.position.z + Math.cos(angle) * radius);
                             pData.nextActionTime = now + 3000 + Math.random() * 4000;
                         }
                     }
-
                     const dist = parrot.position.distanceTo(pData.targetPos);
                     const speed = 0.03 + (dist > 5 ? 0.05 : 0.0);
                     parrot.position.lerp(pData.targetPos, speed);
-                    const lookPos = pData.targetPos.clone();
-                    lookPos.y = parrot.position.y; 
-                    parrot.lookAt(lookPos);
-
+                    const lookPos = pData.targetPos.clone(); lookPos.y = parrot.position.y; parrot.lookAt(lookPos);
                     const flapSpeed = 15;
-                    const unfoldSpeed = 0.1;
-                    pData.lWing.rotation.y = THREE.MathUtils.lerp(pData.lWing.rotation.y, 0, unfoldSpeed);
-                    pData.rWing.rotation.y = THREE.MathUtils.lerp(pData.rWing.rotation.y, 0, unfoldSpeed);
+                    pData.lWing.rotation.y = THREE.MathUtils.lerp(pData.lWing.rotation.y, 0, 0.1);
+                    pData.rWing.rotation.y = THREE.MathUtils.lerp(pData.rWing.rotation.y, 0, 0.1);
                     pData.lWing.rotation.z = Math.sin(pTime * flapSpeed) * 0.6;
                     pData.rWing.rotation.z = -Math.sin(pTime * flapSpeed) * 0.6;
 
@@ -698,7 +993,8 @@
 
                     if (pData.targetObj === 'head') {
                         rig.head.getWorldPosition(targetWorldPos);
-                        targetWorldPos.add(pData.landingOffset); 
+                        const relativeOffset = pData.landingOffset.clone().applyQuaternion(smartY.quaternion);
+                        targetWorldPos.add(relativeOffset); 
                     } else if (pData.targetObj === 'lShoulder') {
                         rig.chest.getWorldPosition(targetWorldPos);
                         const offset = new THREE.Vector3(-0.6 * BASE_SCALE, 0.4 * BASE_SCALE, 0).applyQuaternion(rig.chest.getWorldQuaternion(new THREE.Quaternion()));
@@ -718,7 +1014,6 @@
                     const dist = parrot.position.distanceTo(targetWorldPos);
                     parrot.position.lerp(targetWorldPos, 0.08);
 
-                    // Flare rotation to match SmartY
                     if (dist > 0.6) {
                         parrot.lookAt(targetWorldPos);
                     } else {
@@ -728,10 +1023,8 @@
                     }
 
                     if (dist < 0.1) {
-                        pData.state = 2; 
-                        pData.nextActionTime = now + 2000 + Math.random() * 3000; 
+                        pData.state = 2; pData.nextActionTime = now + 2000 + Math.random() * 3000; 
                     }
-
                     pData.lWing.rotation.z = Math.sin(pTime * 25) * 0.5;
                     pData.rWing.rotation.z = -Math.sin(pTime * 25) * 0.5;
 
@@ -742,7 +1035,8 @@
 
                     if (pData.targetObj === 'head') {
                         rig.head.getWorldPosition(anchorPos);
-                        anchorPos.add(pData.landingOffset); 
+                        const relativeOffset = pData.landingOffset.clone().applyQuaternion(smartY.quaternion);
+                        anchorPos.add(relativeOffset); 
                     } else if (pData.targetObj === 'lShoulder') {
                         rig.chest.getWorldPosition(anchorPos);
                         const offset = new THREE.Vector3(-0.6 * BASE_SCALE, 0.4 * BASE_SCALE, 0).applyQuaternion(rig.chest.getWorldQuaternion(new THREE.Quaternion()));
@@ -761,7 +1055,6 @@
 
                     parrot.position.copy(anchorPos);
                     parrot.rotation.set(0, smartY.rotation.y, 0); 
-
                     const foldSpeed = 0.1;
                     pData.lWing.rotation.z = THREE.MathUtils.lerp(pData.lWing.rotation.z, 0, foldSpeed);
                     pData.rWing.rotation.z = THREE.MathUtils.lerp(pData.rWing.rotation.z, 0, foldSpeed);
@@ -769,88 +1062,56 @@
                     pData.rWing.rotation.y = THREE.MathUtils.lerp(pData.rWing.rotation.y, 1.4, foldSpeed);
 
                     if (now > pData.nextActionTime) {
-                        pData.state = 0; 
-                        pData.targetPos.set(parrot.position.x, parrot.position.y + 4, parrot.position.z); 
-                        pData.nextActionTime = now + 1000;
+                        pData.state = 0; pData.targetPos.set(parrot.position.x, parrot.position.y + 4, parrot.position.z); pData.nextActionTime = now + 1000;
                     }
                 }
             }
 
+            // Facial Expressions for SmartY
             if (Date.now() > nextEyeMove) {
-                if (Math.random() > 0.3) {
-                    eyeTargetX = (Math.random() - 0.5) * 0.14; 
-                    eyeTargetY = (Math.random() - 0.5) * 0.14;
-                } else { eyeTargetX = 0; eyeTargetY = 0.05; }
-                nextEyeMove = Date.now() + 1500 + Math.random() * 2500;
+                if (Math.random() > 0.2) { eyeTargetX = (Math.random() - 0.5) * 0.12; eyeTargetY = (Math.random() - 0.5) * 0.12; } else { eyeTargetX = 0; eyeTargetY = 0.05; }
+                nextEyeMove = Date.now() + 500 + Math.random() * 1500;
             }
             if (leftPupil && rightPupil) {
-                const lerpSpeed = 0.1;
-                leftPupil.position.x += (eyeTargetX - leftPupil.position.x) * lerpSpeed;
-                leftPupil.position.y += (eyeTargetY - leftPupil.position.y) * lerpSpeed;
-                rightPupil.position.x += (eyeTargetX - rightPupil.position.x) * lerpSpeed;
-                rightPupil.position.y += (eyeTargetY - rightPupil.position.y) * lerpSpeed;
+                const lerpSpeed = 0.15;
+                leftPupil.position.x += (eyeTargetX - leftPupil.position.x) * lerpSpeed; leftPupil.position.y += (eyeTargetY - leftPupil.position.y) * lerpSpeed;
+                rightPupil.position.x += (eyeTargetX - rightPupil.position.x) * lerpSpeed; rightPupil.position.y += (eyeTargetY - rightPupil.position.y) * lerpSpeed;
+            }
+            if (rig.mouth) {
+                if (!rig.mouth.userData.nextMove) rig.mouth.userData.nextMove = Date.now() + 3000;
+                if (Date.now() > rig.mouth.userData.nextMove) { rig.mouth.userData.isAnimating = true; rig.mouth.userData.startTime = Date.now(); rig.mouth.userData.nextMove = Date.now() + 3000 + Math.random() * 5000; }
+                if (rig.mouth.userData.isAnimating) {
+                    const elapsed = Date.now() - rig.mouth.userData.startTime; const duration = 300; 
+                    if (elapsed < duration) { const s = 1 + Math.sin((elapsed / duration) * Math.PI) * 0.3; rig.mouth.scale.set(s, s, 1); } else { rig.mouth.scale.set(1, 1, 1); rig.mouth.userData.isAnimating = false; }
+                }
             }
 
             let moved = false;
             const moveVec = new THREE.Vector3();
-            
-            let inputX = 0;
-            let inputZ = 0;
-            let isRunning = false;
+            let inputX = 0; let inputZ = 0; let isRunning = false;
 
-            if (keys.ArrowUp) inputZ -= 1;
-            if (keys.ArrowDown) inputZ += 1;
-            if (keys.ArrowLeft) inputX -= 1;
-            if (keys.ArrowRight) inputX += 1;
+            if (keys.ArrowUp) inputZ -= 1; if (keys.ArrowDown) inputZ += 1;
+            if (keys.ArrowLeft) inputX -= 1; if (keys.ArrowRight) inputX += 1;
             if (keys.Control) isRunning = true;
 
-            if (touchInput.active) {
-                inputX += touchInput.x;
-                inputZ += touchInput.y;
-                if (touchInput.run) isRunning = true;
-            }
-
+            if (touchInput.active) { inputX += touchInput.x; inputZ += touchInput.y; if (touchInput.run) isRunning = true; }
             const currentSpeed = isRunning ? moveSpeed * 2.2 : moveSpeed;
 
-            // --- IMPROVED PHYSICS & COLLISION ---
             if (isGrounded && (Math.abs(inputX) > 0.1 || Math.abs(inputZ) > 0.1)) {
-                
-                // [NEW] Calculate Movement Vector Relative to Camera View
-                const cos = Math.cos(camYaw);
-                const sin = Math.sin(camYaw);
-                
-                // Rotate input vector by camera angle
-                // Forward (inputZ < 0) should move away from camera
-                const worldInputX = inputX * cos + inputZ * sin;
-                const worldInputZ = -inputX * sin + inputZ * cos;
+                const cos = Math.cos(camYaw); const sin = Math.sin(camYaw);
+                const worldInputX = inputX * cos + inputZ * sin; const worldInputZ = -inputX * sin + inputZ * cos;
+                let potentialX = smartY.position.x + (worldInputX * currentSpeed); let potentialZ = smartY.position.z + (worldInputZ * currentSpeed);
+                const currentX = smartY.position.x; const currentZ = smartY.position.z;
+                let nextX = currentX; let nextZ = currentZ;
 
-                let potentialX = smartY.position.x + (worldInputX * currentSpeed);
-                let potentialZ = smartY.position.z + (worldInputZ * currentSpeed);
-
-                const currentX = smartY.position.x;
-                const currentZ = smartY.position.z;
-
-                let nextX = currentX;
-                let nextZ = currentZ;
-
-                if (!checkBuildingCollision(potentialX, currentZ)) {
-                    nextX = potentialX;
-                }
-                
-                if (!checkBuildingCollision(nextX, potentialZ)) {
-                    nextZ = potentialZ;
-                }
+                if (!checkBuildingCollision(potentialX, currentZ)) nextX = potentialX;
+                if (!checkBuildingCollision(nextX, potentialZ)) nextZ = potentialZ;
 
                 if (nextX !== currentX || nextZ !== currentZ) {
-                    moved = true;
-                    smartY.position.x = nextX;
-                    smartY.position.z = nextZ;
-                    
-                    // Update Rotation based on world movement vector
+                    moved = true; smartY.position.x = nextX; smartY.position.z = nextZ;
                     const targetRotation = Math.atan2(worldInputX, worldInputZ);
                     let rotDiff = targetRotation - smartY.rotation.y;
-                    while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
-                    while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
+                    while (rotDiff > Math.PI) rotDiff -= Math.PI * 2; while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
                     smartY.rotation.y += rotDiff * 0.8; 
                 }
             }
@@ -858,8 +1119,7 @@
             const groundHeight = getGroundHeight(smartY.position.x, smartY.position.z);
 
             if (keys.Space && isGrounded) {
-                velocityY = jumpForce;
-                isGrounded = false;
+                velocityY = jumpForce; isGrounded = false;
                 smartY.scale.set(BASE_SCALE * 1.1, BASE_SCALE * 0.85, BASE_SCALE * 1.1);
                 const forwardImpulse = currentSpeed * 0.8; 
                 jumpMomentum.x = Math.sin(smartY.rotation.y) * forwardImpulse;
@@ -867,55 +1127,20 @@
             }
 
             if (!isGrounded) {
-                velocityY -= gravity;
-                smartY.position.y += velocityY;
-                smartY.position.x += jumpMomentum.x;
-                smartY.position.z += jumpMomentum.z;
-
-                if (checkBuildingCollision(smartY.position.x, smartY.position.z)) {
-                    smartY.position.x -= jumpMomentum.x;
-                    smartY.position.z -= jumpMomentum.z;
-                    jumpMomentum.set(0,0,0);
-                }
-
-                if (smartY.position.y <= groundHeight) {
-                    smartY.position.y = groundHeight;
-                    isGrounded = true;
-                    velocityY = 0;
-                    smartY.scale.set(BASE_SCALE * 1.1, BASE_SCALE * 0.85, BASE_SCALE * 1.1);
-                    jumpMomentum.set(0, 0, 0);
-                }
+                velocityY -= gravity; smartY.position.y += velocityY; smartY.position.x += jumpMomentum.x; smartY.position.z += jumpMomentum.z;
+                if (checkBuildingCollision(smartY.position.x, smartY.position.z)) { smartY.position.x -= jumpMomentum.x; smartY.position.z -= jumpMomentum.z; jumpMomentum.set(0,0,0); }
+                if (smartY.position.y <= groundHeight) { smartY.position.y = groundHeight; isGrounded = true; velocityY = 0; smartY.scale.set(BASE_SCALE * 1.1, BASE_SCALE * 0.85, BASE_SCALE * 1.1); jumpMomentum.set(0, 0, 0); }
             } else {
-                if (smartY.position.y > groundHeight) {
-                    isGrounded = false;
-                    velocityY = -0.05; 
-                } else if (smartY.position.y < groundHeight) {
-                    smartY.position.y = THREE.MathUtils.lerp(smartY.position.y, groundHeight, 0.5);
-                }
+                if (smartY.position.y > groundHeight) { isGrounded = false; velocityY = -0.05; } else if (smartY.position.y < groundHeight) { smartY.position.y = THREE.MathUtils.lerp(smartY.position.y, groundHeight, 0.5); }
             }
 
-            if (isGrounded) {
-                smartY.scale.lerp(new THREE.Vector3(BASE_SCALE, BASE_SCALE, BASE_SCALE), 0.15);
-            } else {
-                smartY.scale.lerp(new THREE.Vector3(BASE_SCALE * 0.9, BASE_SCALE * 1.1, BASE_SCALE * 0.9), 0.1);
-            }
+            if (isGrounded) { smartY.scale.lerp(new THREE.Vector3(BASE_SCALE, BASE_SCALE, BASE_SCALE), 0.15); } else { smartY.scale.lerp(new THREE.Vector3(BASE_SCALE * 0.9, BASE_SCALE * 1.1, BASE_SCALE * 0.9), 0.1); }
 
-            // --- ANATOMIC ANIMATION SYSTEM ---
-            if (moved) {
-                animTime += isRunning ? 0.6 : 0.24; 
-            } else {
-                animTime += 0.05; 
-            }
-            
+            // --- ANATOMIC ANIMATION ---
+            if (moved) { animTime += isRunning ? 0.6 : 0.24; } else { animTime += 0.05; }
             const torso = smartY.children[0];
-
             if (torso) {
-                if (moved && isGrounded) {
-                    const leanAmount = isRunning ? 0.35 : 0.15;
-                    torso.rotation.x = THREE.MathUtils.lerp(torso.rotation.x, leanAmount, 0.1); 
-                } else {
-                    torso.rotation.x = THREE.MathUtils.lerp(torso.rotation.x, 0, 0.1); 
-                }
+                if (moved && isGrounded) { const leanAmount = isRunning ? 0.35 : 0.15; torso.rotation.x = THREE.MathUtils.lerp(torso.rotation.x, leanAmount, 0.1); } else { torso.rotation.x = THREE.MathUtils.lerp(torso.rotation.x, 0, 0.1); }
             }
 
             let lArmUpperX = 0, lArmLowerX = -0.1, lArmUpperZ = 0;
@@ -924,52 +1149,28 @@
             let rLegUpperX = 0, rLegLowerX = 0;
 
             if (!isGrounded) {
-                const targetHip = velocityY > 0 ? -1.2 : 0.0;
-                const targetKnee = velocityY > 0 ? 1.5 : 0.2;
-                lLegUpperX = targetHip; rLegUpperX = targetHip;
-                lLegLowerX = targetKnee; rLegLowerX = targetKnee;
-                lArmUpperX = -2.5; rArmUpperX = -2.5;
-                lArmLowerX = 0; rArmLowerX = 0;
+                const targetHip = velocityY > 0 ? -1.2 : 0.0; const targetKnee = velocityY > 0 ? 1.5 : 0.2;
+                lLegUpperX = targetHip; rLegUpperX = targetHip; lLegLowerX = targetKnee; rLegLowerX = targetKnee; lArmUpperX = -2.5; rArmUpperX = -2.5; lArmLowerX = 0; rArmLowerX = 0;
             } else if (moved) {
-                const walkAmp = isRunning ? 1.0 : 0.8; 
-                const forwardBias = isRunning ? -0.1 : -0.25;
-                lLegUpperX = -Math.sin(animTime) * walkAmp + forwardBias;
-                rLegUpperX = -Math.sin(animTime + Math.PI) * walkAmp + forwardBias;
-                lLegLowerX = Math.max(0, Math.cos(animTime)) * (isRunning ? 1.8 : 1.2);
-                rLegLowerX = Math.max(0, Math.cos(animTime + Math.PI)) * (isRunning ? 1.8 : 1.2);
-                lArmUpperX = -lLegUpperX;
-                rArmUpperX = -rLegUpperX;
-                lArmLowerX = -0.5 - Math.sin(animTime) * 0.2;
-                rArmLowerX = -0.5 - Math.sin(animTime + Math.PI) * 0.2;
+                const walkAmp = isRunning ? 1.0 : 0.8; const forwardBias = isRunning ? -0.1 : -0.25;
+                lLegUpperX = -Math.sin(animTime) * walkAmp + forwardBias; rLegUpperX = -Math.sin(animTime + Math.PI) * walkAmp + forwardBias;
+                lLegLowerX = Math.max(0, Math.cos(animTime)) * (isRunning ? 1.8 : 1.2); rLegLowerX = Math.max(0, Math.cos(animTime + Math.PI)) * (isRunning ? 1.8 : 1.2);
+                lArmUpperX = -lLegUpperX; rArmUpperX = -rLegUpperX;
+                lArmLowerX = -0.5 - Math.sin(animTime) * 0.2; rArmLowerX = -0.5 - Math.sin(animTime + Math.PI) * 0.2;
+                if (Math.floor(animTime / Math.PI) > Math.floor(lastAnimTime / Math.PI)) { playStepSound(isRunning); }
+            } else { lArmLowerX = -0.1; rArmLowerX = -0.1; }
 
-                if (Math.floor(animTime / Math.PI) > Math.floor(lastAnimTime / Math.PI)) {
-                    playStepSound(isRunning);
-                }
-            } else {
-                lArmLowerX = -0.1; rArmLowerX = -0.1;
-            }
-
-            if (holdingParrot === 'left') {
-                lArmUpperZ = -parrot.userData.armPose.z; 
-                lArmUpperX = -parrot.userData.armPose.x; 
-                lArmLowerX = -0.2; 
-            } else if (holdingParrot === 'right') {
-                rArmUpperZ = parrot.userData.armPose.z; 
-                rArmUpperX = -parrot.userData.armPose.x; 
-                rArmLowerX = -0.2; 
-            }
+            if (holdingParrot === 'left') { lArmUpperZ = -parrot.userData.armPose.z; lArmUpperX = -parrot.userData.armPose.x; lArmLowerX = -0.2; } else if (holdingParrot === 'right') { rArmUpperZ = parrot.userData.armPose.z; rArmUpperX = -parrot.userData.armPose.x; rArmLowerX = -0.2; }
 
             const lerpSpeed = 0.15;
             rig.leftLeg.upper.rotation.x = THREE.MathUtils.lerp(rig.leftLeg.upper.rotation.x, lLegUpperX, lerpSpeed);
             rig.rightLeg.upper.rotation.x = THREE.MathUtils.lerp(rig.rightLeg.upper.rotation.x, rLegUpperX, lerpSpeed);
             rig.leftLeg.lower.rotation.x = THREE.MathUtils.lerp(rig.leftLeg.lower.rotation.x, lLegLowerX, lerpSpeed);
             rig.rightLeg.lower.rotation.x = THREE.MathUtils.lerp(rig.rightLeg.lower.rotation.x, rLegLowerX, lerpSpeed);
-
             rig.leftArm.upper.rotation.x = THREE.MathUtils.lerp(rig.leftArm.upper.rotation.x, lArmUpperX, lerpSpeed);
             rig.rightArm.upper.rotation.x = THREE.MathUtils.lerp(rig.rightArm.upper.rotation.x, rArmUpperX, lerpSpeed);
             rig.leftArm.upper.rotation.z = THREE.MathUtils.lerp(rig.leftArm.upper.rotation.z, lArmUpperZ, lerpSpeed);
             rig.rightArm.upper.rotation.z = THREE.MathUtils.lerp(rig.rightArm.upper.rotation.z, rArmUpperZ, lerpSpeed);
-            
             rig.leftArm.lower.rotation.x = THREE.MathUtils.lerp(rig.leftArm.lower.rotation.x, lArmLowerX, lerpSpeed);
             rig.rightArm.lower.rotation.x = THREE.MathUtils.lerp(rig.rightArm.lower.rotation.x, rArmLowerX, lerpSpeed);
 
@@ -980,22 +1181,13 @@
             const hRadius = radius * Math.cos(camPitch);
             const offsetX = hRadius * Math.sin(camYaw);
             const offsetZ = hRadius * Math.cos(camYaw);
-
-            const targetCamPos = new THREE.Vector3(
-                smartY.position.x + offsetX,
-                smartY.position.y + offsetY,
-                smartY.position.z + offsetZ
-            );
-            
+            const targetCamPos = new THREE.Vector3(smartY.position.x + offsetX, smartY.position.y + offsetY, smartY.position.z + offsetZ);
             const lookTarget = new THREE.Vector3(smartY.position.x, smartY.position.y + 1.2, smartY.position.z);
-
             camera.position.lerp(targetCamPos, 0.1);
             camera.lookAt(lookTarget);
-
             renderer.render(scene, camera);
         }
 
-        // Init call inside module
         init();
     </script>
 </body>
